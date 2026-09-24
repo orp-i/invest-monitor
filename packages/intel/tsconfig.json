@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../domain" },
+    { "path": "../config" },
+    { "path": "../egress" },
+    { "path": "../storage" }
+  ]
+}

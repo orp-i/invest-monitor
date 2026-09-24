@@ -1,0 +1,719 @@
+# Example portfolio configuration. Copied automatically to APP_CONFIG_PATH on first run when that file
+# does not exist yet (see apps/server/src/bootstrap-config.ts); Docker Compose instead bind-mounts a real
+# config/portfolio.yaml (untracked, git-ignored) read-only over the same path.
+#
+# This file is safe to publish: every egressProfiles.*.proxyUrl is null (direct connections, no proxy) and
+# every source/instrument binding uses egressProfile: direct with an empty egressFallback. To route through
+# a proxy, fill in a proxyUrl above and point the relevant egressProfile/egressFallback at "corp" or "vpn".
+# Only a handful of generic, non-personal instruments are listed (crypto majors, GLD, spot gold, AAPL) —
+# add your own via this file or the UI's instrument search; held positions synced from a broker are added
+# automatically and do not need an entry here.
+version: 1
+clockSkewToleranceMs: 2000
+
+egressProfiles:
+  direct:
+    name: direct
+    proxyUrl: null
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    maxRedirects: 3
+    connectTimeoutMs: 5000
+    requestTimeoutMs: 15000
+  corp:
+    name: corp
+    proxyUrl: null
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    maxRedirects: 5
+    connectTimeoutMs: 5000
+    requestTimeoutMs: 15000
+  vpn:
+    name: vpn
+    proxyUrl: null
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    maxRedirects: 5
+    connectTimeoutMs: 5000
+    requestTimeoutMs: 20000
+
+sources:
+  - id: coingecko
+    adapter: coingecko
+    baseUrl: "https://api.coingecko.com/api/v3"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [instrumentSearch, quote, candle]
+    defaultBinding:
+      cadenceSeconds: 120
+      staleAfterSeconds: 360
+      egressProfile: direct
+    params:
+      vsCurrency: usd
+      days: 1
+    rateLimit:
+      requestsPerSecond: 0.3
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  - id: binance-vision
+    adapter: binance-vision
+    baseUrl: "https://data-api.binance.vision"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [instrumentSearch, quote, candle]
+    defaultBinding:
+      cadenceSeconds: 30
+      staleAfterSeconds: 120
+      egressProfile: direct
+    params:
+      interval: 1d
+      limit: 440
+    rateLimit:
+      requestsPerSecond: 5
+      burst: 5
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  - id: gold-api
+    adapter: gold-api
+    baseUrl: "https://api.gold-api.com"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [instrumentSearch, quote]
+    defaultBinding:
+      cadenceSeconds: 60
+      staleAfterSeconds: 300
+      egressProfile: direct
+    params:
+      metal: XAU
+      quoteAsset: USD
+      unit: troy_ounce
+    rateLimit:
+      requestsPerSecond: 1
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  # Tradier US stocks / ETFs. Shares the account sync Token; no key means
+  # unavailable without sending requests. Environment is selected by .env.
+  - id: tradier-stocks
+    adapter: tradier-stocks
+    baseUrl: "https://api.tradier.com/v1"
+    authRef: "env:TRADIER_ACCESS_TOKEN"
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1"
+    followRedirects: false
+    capabilities: [instrumentSearch, quote]
+    defaultBinding:
+      cadenceSeconds: 30
+      staleAfterSeconds: 120
+      egressProfile: direct
+    params:
+      timeframe: 1d
+      historyDays: 730
+    rateLimit:
+      requestsPerSecond: 0.8
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  # Daily history is collected separately; adding stocks also adds this binding.
+  - id: tradier-stocks-history
+    adapter: tradier-stocks
+    baseUrl: "https://api.tradier.com/v1"
+    authRef: "env:TRADIER_ACCESS_TOKEN"
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1"
+    followRedirects: false
+    capabilities: [candle]
+    defaultBinding:
+      cadenceSeconds: 21600
+      staleAfterSeconds: 604800
+      egressProfile: direct
+    params:
+      timeframe: 1d
+      historyDays: 730
+    rateLimit:
+      requestsPerSecond: 0.8
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  # Optional legacy provider, disabled. Tradier is the active stock source.
+  # M1 US equities. Keep disabled until MASSIVE_API_KEY has a verified
+  # Stocks Starter entitlement; disabled sources render explicitly unavailable.
+  - id: massive-stocks
+    adapter: massive-stocks
+    baseUrl: "https://api.massive.com"
+    authRef: "env:MASSIVE_API_KEY"
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [quote]
+    defaultBinding:
+      cadenceSeconds: 30
+      staleAfterSeconds: 1200
+      egressProfile: direct
+    params:
+      adjusted: true
+      timeframe: 1d
+      historyYears: 5
+      limit: 50000
+    rateLimit:
+      requestsPerSecond: 5
+      burst: 5
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: false
+
+  # Separate source scheduling prevents a 5-year daily backfill from running
+  # at the 30-second quote cadence while reusing the same adapter and key.
+  - id: massive-stocks-history
+    adapter: massive-stocks
+    baseUrl: "https://api.massive.com"
+    authRef: "env:MASSIVE_API_KEY"
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [candle]
+    params:
+      adjusted: true
+      timeframe: 1d
+      historyYears: 5
+      limit: 50000
+    rateLimit:
+      requestsPerSecond: 2
+      burst: 2
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: false
+
+  # Options use the Tradier stock source's token, egress and shared quota.
+  # Expirations/chains/contract history are requested on demand by the option page.
+
+  # M2 public news feeds. Feed bodies remain server-side and enter the
+  # canonical NewsItem pipeline before any browser response is produced.
+  - id: google-news-rss
+    adapter: rss
+    baseUrl: "https://news.google.com/rss/search"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [news]
+    params:
+      query: 'bitcoin OR ethereum OR solana OR "gold price" OR AAPL OR "Treasury yields" OR "crude oil" OR FOMC OR "interest rates"'
+      language: en-US
+      region: US
+      maxItems: 50
+    rateLimit:
+      requestsPerSecond: 0.2
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  - id: federal-reserve-rss
+    adapter: rss
+    baseUrl: "https://www.federalreserve.gov/feeds/press_all.xml"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [news]
+    params:
+      query: null
+      language: en-US
+      region: US
+      maxItems: 30
+    rateLimit:
+      requestsPerSecond: 0.1
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  - id: cointelegraph-rss
+    adapter: rss
+    baseUrl: "https://cointelegraph.com/rss"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [news]
+    params:
+      query: null
+      language: en-US
+      region: US
+      maxItems: 40
+    rateLimit:
+      requestsPerSecond: 0.1
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  - id: seekingalpha-rss
+    adapter: rss
+    baseUrl: "https://seekingalpha.com/market_currents.xml"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [news]
+    params:
+      query: null
+      language: en-US
+      region: US
+      maxItems: 40
+    rateLimit:
+      requestsPerSecond: 0.1
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  - id: coindesk-rss
+    adapter: rss
+    baseUrl: "https://www.coindesk.com/arc/outboundfeeds/rss/"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [news]
+    params:
+      query: null
+      language: en-US
+      region: US
+      maxItems: 40
+    rateLimit:
+      requestsPerSecond: 0.1
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: true
+
+  # The legacy CNBC RSS URL returned HTTP 403 on 2026-08-23. Keep the
+  # contract visible but do not schedule it until an official working URL is verified.
+  - id: cnbc-rss
+    adapter: rss
+    baseUrl: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [news]
+    params:
+      query: null
+      language: en-US
+      region: US
+      maxItems: 40
+    rateLimit:
+      requestsPerSecond: 0.1
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: false
+
+  # EDGAR Atom is reachable only through vpn in this deployment. Replace the
+  # placeholder User-Agent with a real name/email before enabling it.
+  - id: sec-edgar-atom
+    adapter: rss
+    baseUrl: "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
+    authRef: null
+    egressProfile: direct
+    egressFallback: []
+    userAgent: "invest-monitor/0.1 (contact: owner@example.invalid)"
+    followRedirects: true
+    capabilities: [news]
+    params:
+      query: null
+      language: en-US
+      region: US
+      maxItems: 40
+    rateLimit:
+      requestsPerSecond: 0.1
+      burst: 1
+      quotaPerDay: null
+      retryAfterHeader: true
+    enabled: false
+
+sections:
+  - id: crypto
+    title: 加密货币
+    order: 10
+    match: { assetClasses: [crypto], capabilities: [] }
+    widgetKinds: [quote-card, sparkline, candlestick]
+  - id: equity
+    title: 股票
+    order: 20
+    match: { assetClasses: [equity], capabilities: [] }
+    widgetKinds: [quote-card, sparkline, candlestick]
+  - id: options
+    title: 期权
+    order: 30
+    match: { assetClasses: [option], capabilities: [optionChain, greeks] }
+    widgetKinds: [option-chain, greeks-grid]
+  - id: metals
+    title: 黄金
+    order: 40
+    match: { assetClasses: [preciousMetal], capabilities: [] }
+    widgetKinds: [quote-card, sparkline, candlestick]
+  - id: other
+    title: 其他
+    order: 1000
+    match: { assetClasses: [], capabilities: [] }
+    widgetKinds: [quote-card, sparkline, candlestick, option-chain, greeks-grid, news-feed, position-table, pnl-card, health-badge]
+
+instruments:
+  - id: btc-usd
+    assetClass: crypto
+    symbol: BTC/USD
+    displayName: Bitcoin
+    venue: aggregate
+    baseAsset: BTC
+    quoteAsset: USD
+    contractMultiplier: "1"
+    underlyingId: null
+    precision:
+      priceScale: 2
+      quantityScale: 8
+    tags: [crypto, major]
+    active: true
+    metadata:
+      aliases: [Bitcoin, BTC]
+    panelId: crypto-asset
+    watch: true
+    sourceBindings:
+      - sourceId: coingecko
+        instrumentId: btc-usd
+        enabled: true
+        priority: 10
+        capabilities: [quote, candle]
+        providerSymbol: bitcoin
+        quoteAsset: USD
+        conversion: null
+        params:
+          vsCurrency: usd
+        cadenceSeconds: 120
+        staleAfterSeconds: 360
+        egressProfile: direct
+        egressFallback: []
+      - sourceId: binance-vision
+        instrumentId: btc-usd
+        enabled: true
+        priority: 20
+        capabilities: [quote, candle]
+        providerSymbol: BTCUSDT
+        quoteAsset: USDT
+        conversion: null
+        params:
+          interval: 1d
+        cadenceSeconds: 30
+        staleAfterSeconds: 120
+        egressProfile: direct
+        egressFallback: []
+
+  - id: eth-usd
+    assetClass: crypto
+    symbol: ETH/USD
+    displayName: Ethereum
+    venue: aggregate
+    baseAsset: ETH
+    quoteAsset: USD
+    contractMultiplier: "1"
+    underlyingId: null
+    precision:
+      priceScale: 2
+      quantityScale: 8
+    tags: [crypto, major]
+    active: true
+    metadata:
+      aliases: [Ethereum, Ether, ETH]
+    panelId: crypto-asset
+    watch: true
+    sourceBindings:
+      - sourceId: coingecko
+        instrumentId: eth-usd
+        enabled: true
+        priority: 10
+        capabilities: [quote, candle]
+        providerSymbol: ethereum
+        quoteAsset: USD
+        conversion: null
+        params:
+          vsCurrency: usd
+        cadenceSeconds: 120
+        staleAfterSeconds: 360
+        egressProfile: direct
+        egressFallback: []
+      - sourceId: binance-vision
+        instrumentId: eth-usd
+        enabled: true
+        priority: 20
+        capabilities: [quote, candle]
+        providerSymbol: ETHUSDT
+        quoteAsset: USDT
+        conversion: null
+        params:
+          interval: 1d
+        cadenceSeconds: 30
+        staleAfterSeconds: 120
+        egressProfile: direct
+        egressFallback: []
+
+  - id: gld-usd
+    assetClass: equity
+    symbol: GLD
+    displayName: GLD 黄金 ETF（USD/股）
+    venue: NYSE Arca
+    baseAsset: GLD
+    quoteAsset: USD
+    contractMultiplier: "1"
+    underlyingId: null
+    precision: { priceScale: 2, quantityScale: 6 }
+    tags: [gold, etf, us]
+    active: true
+    watch: true
+    metadata:
+      dashboardSection: metals
+      unit: share
+      aliases: [Gold ETF, 黄金ETF, GLD]
+    panelId: equity-asset
+    sourceBindings:
+      - sourceId: tradier-stocks
+        instrumentId: gld-usd
+        enabled: true
+        priority: 10
+        capabilities: [quote]
+        providerSymbol: GLD
+        quoteAsset: USD
+        conversion: null
+        params: {}
+        cadenceSeconds: 30
+        staleAfterSeconds: 120
+        egressProfile: direct
+        egressFallback: []
+      - sourceId: tradier-stocks-history
+        instrumentId: gld-usd
+        enabled: true
+        priority: 11
+        capabilities: [candle]
+        providerSymbol: GLD
+        quoteAsset: USD
+        conversion: null
+        params: {}
+        cadenceSeconds: 21600
+        staleAfterSeconds: 604800
+        egressProfile: direct
+        egressFallback: []
+
+  - id: xau-usd
+    assetClass: preciousMetal
+    symbol: XAU/USD
+    displayName: 黄金现货（USD/金衡盎司）
+    venue: spot
+    baseAsset: XAU
+    quoteAsset: USD
+    contractMultiplier: "1"
+    underlyingId: null
+    precision:
+      priceScale: 2
+      quantityScale: 6
+    tags: [precious-metal, spot]
+    active: true
+    metadata:
+      unit: troy_ounce
+      aliases: [Gold, XAU]
+    panelId: metal-spot
+    watch: true
+    sourceBindings:
+      - sourceId: gold-api
+        instrumentId: xau-usd
+        enabled: true
+        priority: 10
+        capabilities: [quote]
+        providerSymbol: XAU
+        quoteAsset: USD
+        conversion: null
+        params:
+          metal: XAU
+          quoteAsset: USD
+          unit: troy_ounce
+        cadenceSeconds: 60
+        staleAfterSeconds: 300
+        egressProfile: direct
+        egressFallback: []
+
+  - id: sol-usd
+    assetClass: crypto
+    symbol: SOL/USD
+    displayName: Solana
+    venue: aggregate
+    baseAsset: SOL
+    quoteAsset: USD
+    contractMultiplier: "1"
+    underlyingId: null
+    precision:
+      priceScale: 2
+      quantityScale: 8
+    tags: [crypto, major]
+    active: true
+    metadata:
+      aliases: [Solana, SOL]
+    panelId: crypto-asset
+    watch: true
+    sourceBindings:
+      - sourceId: coingecko
+        instrumentId: sol-usd
+        enabled: true
+        priority: 10
+        capabilities: [quote, candle]
+        providerSymbol: solana
+        quoteAsset: USD
+        conversion: null
+        params:
+          vsCurrency: usd
+        cadenceSeconds: 120
+        staleAfterSeconds: 360
+        egressProfile: direct
+        egressFallback: []
+      - sourceId: binance-vision
+        instrumentId: sol-usd
+        enabled: true
+        priority: 20
+        capabilities: [quote, candle]
+        providerSymbol: SOLUSDT
+        quoteAsset: USDT
+        conversion: null
+        params:
+          interval: 1d
+        cadenceSeconds: 30
+        staleAfterSeconds: 120
+        egressProfile: direct
+        egressFallback: []
+
+  - id: aapl-usd
+    assetClass: equity
+    symbol: AAPL
+    displayName: Apple Inc.
+    venue: NASDAQ
+    baseAsset: AAPL
+    quoteAsset: USD
+    contractMultiplier: "1"
+    underlyingId: null
+    precision:
+      priceScale: 2
+      quantityScale: 6
+    tags: [equity, us, technology]
+    active: true
+    metadata:
+      timezone: America/New_York
+      aliases: [Apple, AAPL]
+    panelId: equity-asset
+    watch: true
+    sourceBindings:
+      - sourceId: tradier-stocks
+        instrumentId: aapl-usd
+        enabled: true
+        priority: 10
+        capabilities: [quote]
+        providerSymbol: AAPL
+        quoteAsset: USD
+        conversion: null
+        params: {}
+        cadenceSeconds: 30
+        # Runtime adjusts this to 1200 for Tradier sandbox (15-minute delay).
+        staleAfterSeconds: 120
+        egressProfile: direct
+        egressFallback: []
+      - sourceId: tradier-stocks-history
+        instrumentId: aapl-usd
+        enabled: true
+        priority: 20
+        capabilities: [candle]
+        providerSymbol: AAPL
+        quoteAsset: USD
+        conversion: null
+        params: {}
+        cadenceSeconds: 21600
+        staleAfterSeconds: 604800
+        egressProfile: direct
+        egressFallback: []
+
+symbolMaps:
+  - sourceId: coingecko
+    entries:
+      btc-usd: bitcoin
+      eth-usd: ethereum
+      sol-usd: solana
+  - sourceId: binance-vision
+    entries:
+      btc-usd: BTCUSDT
+      eth-usd: ETHUSDT
+      sol-usd: SOLUSDT
+  - sourceId: gold-api
+    entries:
+      xau-usd: XAU
+  - sourceId: tradier-stocks
+    entries:
+      aapl-usd: AAPL
+  - sourceId: tradier-stocks-history
+    entries:
+      aapl-usd: AAPL
+
+intel:
+  enabled: true
+  sources: [google-news-rss, federal-reserve-rss, cointelegraph-rss, seekingalpha-rss, coindesk-rss]
+  pollingSeconds: 300
+  dedup:
+    canonicalizeTrackingParams: true
+    simHashDistance: 3
+    minHashJaccard: 0.85
+  llmRouteId: news-summary
+
+llm:
+  providers:
+    # Inference remains deliberately disabled until the user approves sending
+    # news text to a third party, chooses a model/budget, and provides a key.
+    - id: openrouter
+      baseUrl: "https://openrouter.ai/api/v1"
+      apiKeyRef: "env:OPENROUTER_API_KEY"
+      egressProfile: direct
+      egressFallback: []
+      models: ["provider/model-to-be-confirmed"]
+      enabled: false
+  routes:
+    news-summary:
+      orderedProviders: [openrouter]
+      maxInputTokens: 4000
+      maxOutputTokens: 500
+      dailyUsdBudget: "1.00"
+
+accounts: []

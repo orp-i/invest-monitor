@@ -1,0 +1,21 @@
+{
+  "name": "@invest/adapters",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@invest/config": "0.1.0",
+    "@invest/domain": "0.1.0",
+    "@invest/egress": "0.1.0",
+    "decimal.js": "^10.6.0",
+    "zod": "4.4.3"
+  }
+}

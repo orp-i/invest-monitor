@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Fixture Market News</title>
+    <item>
+      <title>Apple reports stronger quarterly earnings</title>
+      <link>https://example.com/apple-results/?utm_source=rss&amp;id=42#section</link>
+      <pubDate>Sun, 23 Aug 2026 12:00:00 GMT</pubDate>
+      <source>Fixture Wire</source>
+      <description><![CDATA[<p>Apple reported higher revenue and issued updated guidance.</p><script>ignore()</script>]]></description>
+    </item>
+    <item>
+      <title>Bitcoin ETF liquidity rises</title>
+      <link>https://example.com/bitcoin-etf</link>
+      <pubDate>Sun, 23 Aug 2026 12:05:00 GMT</pubDate>
+      <description><![CDATA[Bitcoin market liquidity increased after new ETF inflows.]]></description>
+    </item>
+  </channel>
+</rss>

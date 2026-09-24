@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/config" },
+    { "path": "../../packages/egress" },
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/adapters" },
+    { "path": "../../packages/collector" },
+    { "path": "../../packages/intel" }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "invest-monitor",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b && npm run build --workspace @invest/web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "tsx apps/server/src/main.ts",
+    "start": "node --env-file-if-exists=.env apps/server/dist/main.js",
+    "dev:web": "npm run dev --workspace @invest/web",
+    "bundle": "node packaging/build-bundle.mjs",
+    "release:prepare": "node scripts/prepare-public-release.mjs"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

@@ -1,0 +1,64 @@
+name: Publish Docker images
+
+# Builds and pushes the two runtime images (Dockerfile targets api-runtime/web-runtime — see
+# docker-compose.ghcr.yml, which pulls them by these same names) to GHCR, multi-arch
+# (linux/amd64 + linux/arm64). Triggered by a version tag, or manually for a rebuild without a new tag
+# (e.g. after a base-image security update); either way the image is tagged with the ref name that
+# triggered the run, plus "latest".
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: api-runtime
+            image: invest-monitor-api
+          - target: web-runtime
+            image: invest-monitor-web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lowercase repository owner
+        # GHCR repository paths must be lowercase; github.repository_owner preserves the account's display case.
+        id: owner
+        run: echo "name=${OWNER,,}" >> "$GITHUB_OUTPUT"
+        env:
+          OWNER: ${{ github.repository_owner }}
+
+      - name: Set up QEMU (for linux/arm64)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.name }}/${{ matrix.image }}:${{ github.ref_name }}
+            ghcr.io/${{ steps.owner.outputs.name }}/${{ matrix.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

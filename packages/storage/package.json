@@ -1,0 +1,18 @@
+{
+  "name": "@invest/storage",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && cp schema.sql dist/schema.sql"
+  },
+  "dependencies": {
+    "@invest/domain": "0.1.0",
+    "better-sqlite3": "^12.4.1"
+  }
+}

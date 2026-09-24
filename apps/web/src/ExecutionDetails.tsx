@@ -1,0 +1,18 @@
+import { useMemo } from "react";
+import { Decimal } from "decimal.js";
+import { reviewBroker, reviewExecutionDetails, type TradingCase, type ReviewFill } from "@invest/domain";
+import { formatMoney, formatTimestamp } from "./format";
+export function fillTime(fill: ReviewFill) {
+  if (fill.timePrecision === 'instant') return formatTimestamp(fill.occurredAt);
+  const match = /^(\d{4})(\d{2})(\d{2})(?:;(\d{2})(\d{2})(\d{2}))?$/.exec(fill.occurredAt);
+  const text = match ? `${match[1]}-${match[2]}-${match[3]}${match[4] ? ` ${match[4]}:${match[5]}:${match[6]}` : ''}` : fill.occurredAt;
+  return `${text} · ${fill.timePrecision === 'day' ? '仅日期' : '券商报表时区'}`;
+}
+export function ExecutionSummary({ entry }: { entry: TradingCase }) {
+  const detail = useMemo(() => reviewExecutionDetails(entry), [entry]);
+  return <div className="execution-summary"><div className="content-heading"><div><h4>开平仓与费用</h4><p className="chart-note"><strong>开仓结构：{detail.direction}</strong>{detail.strategy.referenceUrl && <> · <a href={detail.strategy.referenceUrl} target="_blank" rel="noopener noreferrer">OptionStrat 策略说明</a></>}</p></div><span>{entry.fills.length} 条成交 / 结算记录</span></div><div className="position-table-wrap"><table className="position-table"><thead><tr><th>标的 / 券商</th><th>开仓均价</th><th>平仓均价</th><th>开仓 / 平仓数量</th><th>手续费</th><th>净剩余数量</th><th>该腿净盈亏</th></tr></thead><tbody>{detail.legs.map(leg => <tr key={leg.key}><td><strong>{leg.symbol}</strong><span>{leg.broker} · {leg.currency}</span><span>{leg.directionLabel}</span></td><td>{formatMoney(leg.openingPrice, 4)}</td><td>{formatMoney(leg.closingPrice, 4)}</td><td>{leg.classificationKnown ? `${leg.openingQuantity} / ${leg.closingQuantity}` : '开平待核实'}</td><td>{formatMoney(leg.fees)}</td><td>{leg.netQuantity}</td><td>{formatMoney(leg.pnl)}</td></tr>)}</tbody></table></div>{entry.pairingBasis && <p className="chart-note">{entry.pairingBasis}</p>}{!detail.legs.length && <p className="empty-state">尚未关联实际成交。</p>}<p className="chart-note">买入 Put 看空标的，买入 Call 看多标的；卖出开仓方向相反。合约多空描述买入或卖出持有，买入平仓是空头回补。组合按开仓时的各腿结构识别，部分平仓后敞口可能变化。均价按成交数量加权，组合分腿展示；开平仓采用结单标记或完整成交顺序，无法确认时留空。净盈亏已扣费用，未平仓腿暂不计算。</p></div>;
+}
+export function ExecutionRows({ entry }: { entry: TradingCase }) {
+  const detail = useMemo(() => reviewExecutionDetails(entry), [entry]);
+  return <div className="position-table-wrap execution-rows"><table className="position-table"><thead><tr><th>券商 / 成交时间</th><th>标的</th><th>买卖 / 开平</th><th>数量 × 乘数</th><th>成交价</th><th>成交金额</th><th>手续费</th><th>净现金</th></tr></thead><tbody>{[...entry.fills].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt)).map(f => { const gross = f.price === null || f.multiplier === null ? null : new Decimal(f.provenance?.grossAmount ?? new Decimal(f.price).mul(f.quantity).mul(f.multiplier)); const net = f.netCash ?? (gross === null || f.feeCost === null ? null : gross.mul(f.side === 'sell' ? 1 : -1).minus(f.feeCost).toFixed()); return <tr key={f.id}><td>{reviewBroker(f)}<span>{fillTime(f)}</span>{f.expirationConfirmation && <span>用户确认：{f.expirationConfirmation.note} · 记录于 {formatTimestamp(f.expirationConfirmation.recordedAt)}</span>}</td><td><strong>{f.symbol}</strong><span>{f.currency}</span></td><td>{f.expirationConfirmation ? '到期作废' : f.side === 'buy' ? '买入' : '卖出'}<span>{detail.actions[f.id]}</span></td><td>{f.quantity} × {f.multiplier ?? '待核实'}</td><td>{f.price ?? '—'}</td><td>{gross ? formatMoney(gross.toFixed()) : '—'}</td><td>{formatMoney(f.feeCost)}{f.provenance && <details><summary>费用明细</summary>{Object.entries(f.provenance.feeBreakdown).map(([name, amount]) => <p key={name}>{name}：{amount}</p>)}<p>{f.provenance.fileName} · 第 {f.provenance.page} 页</p></details>}</td><td>{formatMoney(net)}</td></tr>; })}</tbody></table></div>;
+}

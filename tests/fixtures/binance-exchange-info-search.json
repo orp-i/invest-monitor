@@ -1,0 +1,11 @@
+{
+  "symbols": [
+    { "symbol": "DOGEUSDT", "baseAsset": "DOGE", "quoteAsset": "USDT", "status": "TRADING" },
+    { "symbol": "DOGEUSDC", "baseAsset": "DOGE", "quoteAsset": "USDC", "status": "TRADING" },
+    { "symbol": "DOGEFDUSD", "baseAsset": "DOGE", "quoteAsset": "FDUSD", "status": "TRADING" },
+    { "symbol": "1MBABYDOGEUSDT", "baseAsset": "1MBABYDOGE", "quoteAsset": "USDT", "status": "TRADING" },
+    { "symbol": "1MBABYDOGEUSDC", "baseAsset": "1MBABYDOGE", "quoteAsset": "USDC", "status": "TRADING" },
+    { "symbol": "1000SATSUSDT", "baseAsset": "1000SATS", "quoteAsset": "USDT", "status": "TRADING" },
+    { "symbol": "币安人生USDT", "baseAsset": "币安人生", "quoteAsset": "USDT", "status": "TRADING" }
+  ]
+}

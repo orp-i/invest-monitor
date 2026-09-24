@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/domain" },
+    { "path": "./packages/config" },
+    { "path": "./packages/egress" },
+    { "path": "./packages/storage" },
+    { "path": "./packages/adapters" },
+    { "path": "./packages/collector" },
+    { "path": "./packages/intel" },
+    { "path": "./apps/server" }
+  ]
+}

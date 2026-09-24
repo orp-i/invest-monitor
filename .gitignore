@@ -1,0 +1,44 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build
+dist/
+build/
+.next/
+*.tsbuildinfo
+dist-bundle/
+dist-release/
+
+# runtime data (never commit market data / db)
+data/
+trade_file/
+*.db
+*.db-*
+*.sqlite
+
+# local instrument/source configuration (public clones start from config/portfolio.example.yaml)
+config/portfolio.yaml
+
+# secrets — NEVER commit
+.env
+.env.*
+!.env.example
+config/secrets.*.yaml
+secrets/
+!secrets/.gitkeep
+*.pem
+*.key
+
+# logs / cache
+logs/
+*.log
+.cache/
+.turbo/
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.gstack/

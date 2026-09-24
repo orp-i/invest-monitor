@@ -1,0 +1,151 @@
+x-proxy-build: &proxy-build
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  args:
+    HTTP_PROXY: ${DOCKER_BUILD_PROXY_URL:-}
+    HTTPS_PROXY: ${DOCKER_BUILD_PROXY_URL:-}
+    http_proxy: ${DOCKER_BUILD_PROXY_URL:-}
+    https_proxy: ${DOCKER_BUILD_PROXY_URL:-}
+    NO_PROXY: "localhost,127.0.0.1,::1"
+    no_proxy: "localhost,127.0.0.1,::1"
+
+services:
+  api:
+    build:
+      <<: *proxy-build
+      context: .
+      dockerfile: Dockerfile
+      target: api-runtime
+    environment:
+      TZ: ${TZ:-America/New_York}
+      NODE_ENV: production
+      APP_CONFIG_PATH: /app/config/portfolio.yaml
+      SQLITE_PATH: /app/data/invest.sqlite
+      MARKET_HOT_PATH: /app/market-hot/market.sqlite
+      MARKET_ARCHIVE_DIR: /app/market-archive
+      LOG_DIR: /app/logs
+      LOG_SYSLOG_PORT: "5514"
+      API_BIND_HOST: 0.0.0.0
+      API_PORT: "3000"
+      UI_AUTH_MODE: password
+      UI_AUTH_TOKEN_FILE: /run/secrets/ui_auth_token
+      UI_AUTH_COOKIE_SECURE: ${UI_AUTH_COOKIE_SECURE:-false}
+      UI_AUTH_SESSION_TTL_SECONDS: ${UI_AUTH_SESSION_TTL_SECONDS:-43200}
+      MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      DAILY_LLM_PROVIDER: ${DAILY_LLM_PROVIDER:-openai-compatible}
+      DAILY_LLM_BASE_URL: ${DAILY_LLM_BASE_URL:-}
+      DAILY_LLM_API_KEY: ${DAILY_LLM_API_KEY:-}
+      DAILY_LLM_MODEL: ${DAILY_LLM_MODEL:-}
+      DAILY_LLM_TIMEOUT_MS: ${DAILY_LLM_TIMEOUT_MS:-180000}
+      DAILY_LLM_MAX_OUTPUT_TOKENS: ${DAILY_LLM_MAX_OUTPUT_TOKENS:-6000}
+      DAILY_LLM_EGRESS_PROFILE: ${DAILY_LLM_EGRESS_PROFILE:-auto}
+      TRADIER_ACCESS_TOKEN: ${TRADIER_ACCESS_TOKEN:-}
+      TRADIER_ENVIRONMENT: ${TRADIER_ENVIRONMENT:-live}
+      IBKR_FLEX_TOKEN: ${IBKR_FLEX_TOKEN:-}
+      IBKR_FLEX_QUERY_ID: ${IBKR_FLEX_QUERY_ID:-}
+      SCHWAB_APP_KEY: ${SCHWAB_APP_KEY:-}
+      SCHWAB_APP_SECRET: ${SCHWAB_APP_SECRET:-}
+      SCHWAB_REDIRECT_URI: ${SCHWAB_REDIRECT_URI:-}
+      SCHWAB_REFRESH_TOKEN: ${SCHWAB_REFRESH_TOKEN:-}
+      ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+      ALPACA_ENVIRONMENT: ${ALPACA_ENVIRONMENT:-live}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      SETTINGS_READONLY: ${SETTINGS_READONLY:-false}
+      UI_PUBLIC_URL: ${UI_PUBLIC_URL:-}
+      BROKER_EGRESS_PROXY_URL: ${DOCKER_EGRESS_PROXY_URL:-}
+      EGRESS_SINGLE_PROXY_URL: ${DOCKER_EGRESS_PROXY_URL:-}
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      ALL_PROXY: ""
+      all_proxy: ""
+      NO_PROXY: "localhost,127.0.0.1,api"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config:/app/config:ro
+      - type: bind
+        source: ${INVEST_DATA_DIR:-./data}/db
+        target: /app/data
+        bind:
+          create_host_path: true
+      - market-hot:/app/market-hot
+      - type: bind
+        source: ${INVEST_DATA_DIR:-./data}/market-archive
+        target: /app/market-archive
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${INVEST_DATA_DIR:-./data}/logs
+        target: /app/logs
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${INVEST_DATA_DIR:-./data}/backups
+        target: /app/backups
+        bind:
+          create_host_path: true
+    secrets:
+      - ui_auth_token
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/health/ready').then(async (r) => {
+          const body = await r.json(); if (!r.ok || body.scheduler !==
+          'running') process.exit(1); }).catch(() => process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "1m"
+        max-file: "2"
+
+  web:
+    build:
+      <<: *proxy-build
+      context: .
+      dockerfile: Dockerfile
+      target: web-runtime
+    environment:
+      TZ: ${TZ:-America/New_York}
+      API_UPSTREAM: http://api:3000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${UI_BIND_IP:-0.0.0.0}:${UI_PORT:-8080}:8080"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O - http://127.0.0.1:8080/health/live |
+          grep -q '"status":"ok"'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "1m"
+        max-file: "2"
+
+volumes:
+  market-hot:
+
+secrets:
+  ui_auth_token:
+    file: ./secrets/ui_auth_token

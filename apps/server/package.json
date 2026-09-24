@@ -1,0 +1,25 @@
+{
+  "name": "@invest/server",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/main.d.ts",
+      "import": "./dist/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@invest/adapters": "0.1.0",
+    "@invest/collector": "0.1.0",
+    "@invest/config": "0.1.0",
+    "@invest/domain": "0.1.0",
+    "@invest/egress": "0.1.0",
+    "@invest/intel": "0.1.0",
+    "@invest/storage": "0.1.0",
+    "fast-xml-parser": "^5.2.5",
+    "undici": "^7.0.0"
+  }
+}

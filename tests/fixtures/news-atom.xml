@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>SEC Current Filings</title>
+  <entry>
+    <title>AAPL 8-K filing accepted</title>
+    <link rel="alternate" href="https://www.sec.gov/Archives/edgar/data/320193/fixture.htm" />
+    <updated>2026-08-23T12:10:00-04:00</updated>
+    <author><name>SEC EDGAR</name></author>
+    <summary type="html">Apple Inc. submitted a current report.</summary>
+  </entry>
+</feed>

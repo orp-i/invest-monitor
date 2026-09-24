@@ -55,7 +55,7 @@ docker compose up -d --build
 | `UI_BIND_IP` | `0.0.0.0` | Web 容器对外监听的绑定地址（全部接口）；只想本机/内网访问就绑定对应网卡或 VPN 地址 |
 | `UI_PORT` | `8080` | Web 容器对外映射的端口 |
 | `INVEST_DATA_DIR` | `./data` | 宿主机上的数据根目录，自身需要提前存在且可写；`db/`、`market-archive/`、`logs/`、`backups/` 等子目录会自动在它下面创建 |
-| `DOCKER_EGRESS_PROXY_URL` | 直连 | 容器运行时访问外部网络（行情、新闻、券商 API）的 HTTP 代理，容器内用 `host.docker.internal` 访问宿主机代理，不是 `localhost` |
+| `DOCKER_EGRESS_PROXY_URL` | 直连 | 容器运行时访问外部网络（行情、新闻、券商 API）的 HTTP 代理，容器内用 `host.docker.internal` 访问宿主机代理，不是 `localhost`；Compose 会把它同时注入为容器内的 `EGRESS_SINGLE_PROXY_URL` 与 `BROKER_EGRESS_PROXY_URL` |
 | `DOCKER_BUILD_PROXY_URL` | 直连 | `docker compose up --build` 时构建阶段（apt/npm）使用的代理，仅从源码构建时需要 |
 
 完整变量表见下方"环境变量参考"。容器内业务逻辑与源码模式完全一致，账号设置页保存的凭证同样加密落库。
@@ -103,6 +103,8 @@ cd invest-monitor-<version>-linux-x64
 | `API_PORT` | `3000` | API 监听端口 |
 | `UI_PUBLIC_URL` | 按请求 Host 头推断 | 显式指定对外地址，仅用于 `GET /api/settings/schema` 示例命令中的地址 |
 | `TZ` | 系统时区 | 建议设为 `America/New_York`，与交易日历时区一致，Docker 镜像已默认如此 |
+| `EGRESS_SINGLE_PROXY_URL` | 直连 | 行情/新闻出口（Tradier 报价、金价现货、加密货币、RSS 新闻等）统一使用的 HTTP 代理，覆盖 `config/portfolio.yaml` 中全部 `egressProfiles.*.proxyUrl`；源码/便携模式在 `.env` 中设置，Docker 用 `DOCKER_EGRESS_PROXY_URL` |
+| `EGRESS_DIRECT_PROXY_URL` / `EGRESS_CORP_PROXY_URL` / `EGRESS_VPN_PROXY_URL` | 沿用 YAML | 只覆盖 `egressProfiles` 中对应一个出口的 `proxyUrl`，留空保持 YAML 值；Compose 不转发这三项 |
 
 **鉴权**
 
@@ -135,7 +137,7 @@ cd invest-monitor-<version>-linux-x64
 | `SCHWAB_REFRESH_TOKEN_ISSUED_AT` | 未设置 | 系统在授权成功后自动写入，仅用于提示到期时间，不建议手工填写 |
 | `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` | 未设置 | Alpaca API Key |
 | `ALPACA_ENVIRONMENT` | `live` | `live` 或 `paper` |
-| `BROKER_EGRESS_PROXY_URL` | 直连 | 券商同步请求使用的 HTTP 代理 |
+| `BROKER_EGRESS_PROXY_URL` | 直连 | 券商同步请求使用的 HTTP 代理，与行情/新闻出口的 `EGRESS_SINGLE_PROXY_URL` 相互独立 |
 
 **日报 LLM 推理（账号设置可覆盖）**
 
@@ -156,7 +158,7 @@ cd invest-monitor-<version>-linux-x64
 | `UI_BIND_IP` | `0.0.0.0` | Web 容器端口映射的绑定地址（全部接口） |
 | `UI_PORT` | `8080` | Web 容器对外端口 |
 | `INVEST_DATA_DIR` | `./data` | 宿主机数据根目录，自身需提前存在，子目录自动创建 |
-| `DOCKER_EGRESS_PROXY_URL` | 直连 | 容器运行时出口代理（行情/新闻/券商），容器内访问宿主机用 `host.docker.internal` |
+| `DOCKER_EGRESS_PROXY_URL` | 直连 | 容器运行时出口代理（行情/新闻/券商），容器内访问宿主机用 `host.docker.internal`；注入为 `EGRESS_SINGLE_PROXY_URL` + `BROKER_EGRESS_PROXY_URL` |
 | `DOCKER_BUILD_PROXY_URL` | 直连 | 源码构建镜像时（apt/npm）使用的代理 |
 
 **其他/历史遗留**
@@ -187,5 +189,7 @@ cd invest-monitor-<version>-linux-x64
 **改了 `.env` 不生效**：Docker 下必须 `docker compose up -d --force-recreate`（或 `--build`），单纯 `restart` 不会重新注入环境变量；源码/便携模式需要重启进程。
 
 **容器访问不了代理/外部网络**：容器内要访问宿主机上监听的代理，用 `host.docker.internal`，不是 `localhost` 或 `127.0.0.1`（那指向容器自己）。`DOCKER_BUILD_PROXY_URL` 只影响构建阶段（apt/npm 下载依赖），`DOCKER_EGRESS_PROXY_URL` 只影响容器运行后的出站请求（行情、新闻、券商同步）；两者互相独立，缺一个不会自动复用另一个。
+
+**日志出现 `getaddrinfo ENOTFOUND www.coindesk.com`（或其他行情/新闻站点），来源熔断器显示 `closed` 并反复重试**：示例配置默认直连（`egressProfiles.*.proxyUrl` 为空），这是本机 DNS 或直连被阻断，不是程序错误；`closed` 表示熔断器未打开、下次到点仍会重试。三种处理：① 源码/便携模式在 `.env` 里填 `EGRESS_SINGLE_PROXY_URL=http://<代理地址>:<端口>`（Docker 填 `DOCKER_EGRESS_PROXY_URL`），重启后所有行情/新闻出口走代理；② 只需要券商同步时，填 `BROKER_EGRESS_PROXY_URL` 即可，行情来源的报错不影响券商同步与复盘；③ 不需要该来源时，在 `config/portfolio.yaml` 里删除或停用对应 `sources` 条目。
 
 **`better-sqlite3` 编译失败**：它是可选依赖，默认存储驱动 `node-sqlite` 不需要它；如果不打算切换驱动，可以忽略安装失败（不影响 `STORAGE_DRIVER` 保持默认时的运行）。

@@ -1,16 +1,20 @@
-import { identifyStrategy, optionIdentity } from "./trade-direction.js";
+import { Decimal } from "decimal.js";
+import { baseStrategyLabel, identifyStrategy, optionIdentity } from "./trade-direction.js";
 import { tradierSymbol } from "./market-data.js";
 import { brokerReportDay, reviewExecutionDetails } from "./review-analytics.js";
 import type { ReviewFill, TradingCase } from "./trading-review.js";
 
 // Step 2 of automatic matching: group per-contract pairing cycles into one strategy when the broker
 // evidence says they belong together. Evidence strength decides what happens:
-//   order   – fills share a multi-leg order id            → merge automatically
-//   instant – legs opened (and closed) at the same second  → merge automatically only when the
-//             structure is recognized (vertical, straddle, butterfly, condor…)
-//   day     – same account, underlying and report day only → never merged, offered as a suggestion
+//   order     – fills share a multi-leg order id              → merge automatically
+//   instant   – legs opened (and closed) at the same second    → merge automatically only when the
+//               structure is recognized (vertical, straddle, butterfly, condor…)
+//   structure – same account, underlying, report day(s), every fill carries a broker open/close flag
+//               (closed lots / observed orders) and the legs form a recognized structure → merge automatically;
+//               several same-day round trips stay in one case because their pairing across legs is unknown
+//   day       – same account, underlying and report day only   → never merged, offered as a suggestion
 // Day-precision fills are never ordered or grouped by guesswork; cross-account fills never mix.
-export type ClusterEvidence = "order" | "instant" | "day";
+export type ClusterEvidence = "order" | "instant" | "structure" | "day";
 export interface StrategyCluster {
   groups: ReviewFill[][];
   evidence: ClusterEvidence | null;
@@ -20,7 +24,27 @@ export interface StrategyCluster {
   autoMerge: boolean;
   basis: string;
 }
-const RANK: Record<ClusterEvidence, number> = { order: 3, instant: 2, day: 1 };
+const RANK: Record<ClusterEvidence, number> = { order: 4, instant: 3, structure: 2, day: 1 };
+const explicitEffect = (f: ReviewFill) => f.positionEffect ?? f.provenance?.action ?? null;
+/** Two same-expiry contracts of one type at different strikes with matching quantities look like a vertical even
+ * before open/close flags arrive. Only a hint for the suggestion text; direction stays unverified. */
+export function sameDayShapeHint(fills: readonly ReviewFill[]): string | null {
+  const ids = fills.map(f => optionIdentity(f.symbol));
+  const first = ids[0];
+  if (!first || ids.some(i => !i || i.underlying !== first.underlying || i.expiry !== first.expiry)) return null;
+  const legs = new Map<string, { type: "C" | "P"; strike: string; bought: Decimal; sold: Decimal }>();
+  fills.forEach((f, i) => {
+    const id = ids[i]!, leg = legs.get(f.symbol) ?? { type: id.type, strike: id.strike, bought: new Decimal(0), sold: new Decimal(0) };
+    if (f.side === "buy") leg.bought = leg.bought.plus(f.quantity); else leg.sold = leg.sold.plus(f.quantity);
+    legs.set(f.symbol, leg);
+  });
+  if (legs.size !== 2) return null;
+  const [a, b] = [...legs.values()] as [NonNullable<ReturnType<typeof legs.get>>, NonNullable<ReturnType<typeof legs.get>>];
+  if (a.type !== b.type || a.strike === b.strike) return null;
+  const closed = a.bought.eq(a.sold) && b.bought.eq(b.sold) && a.bought.eq(b.bought) && a.bought.gt(0);
+  const open = (a.sold.isZero() && b.bought.isZero() && a.bought.eq(b.sold) && a.bought.gt(0)) || (a.bought.isZero() && b.sold.isZero() && a.sold.eq(b.bought) && a.sold.gt(0));
+  return closed || open ? `形态符合${a.type === "P" ? "认沽" : "认购"}价差（多空方向待核实，缺少开平标记）` : null;
+}
 const weaker = (a: ClusterEvidence | null, b: ClusterEvidence): ClusterEvidence => a === null ? b : RANK[a] <= RANK[b] ? a : b;
 export const fillUnderlying = (fill: ReviewFill): string => optionIdentity(fill.symbol)?.underlying ?? tradierSymbol(fill.symbol);
 export const fillAccountKey = (fill: ReviewFill): string => fill.accountKey ?? fill.instrumentKey;
@@ -66,17 +90,27 @@ export function clusterReviewGroups(groups: ReviewFill[][]): StrategyCluster[] {
   nodes.forEach((_, i) => { const root = find(i); members.set(root, [...(members.get(root) ?? []), i]); });
   return [...members.entries()].map(([root, indexes]) => {
     const clusterGroups = indexes.map(i => groups[nodes[i]!.index]!);
-    const kind = clusterGroups.length > 1 ? evidence[root] : null;
+    let kind = clusterGroups.length > 1 ? evidence[root] : null;
     const fills = clusterGroups.flat();
-    const strategy = reviewExecutionDetails({ fills, historyComplete: false } as TradingCase).strategy;
+    const details = reviewExecutionDetails({ fills, historyComplete: false } as TradingCase);
+    const strategy = details.strategy;
     const structure = { label: strategy.label, recognized: strategy.referenceUrl !== null, referenceUrl: strategy.referenceUrl };
     const first = nodes[indexes[0]!]!;
-    const autoMerge = kind === "order" || (kind === "instant" && structure.recognized);
+    // Day-aligned legs whose every fill carries a broker open/close flag and whose shape is recognized are
+    // strong enough to merge; their same-day round trips are not split because cross-leg pairing is unknown.
+    const flagged = fills.every(f => explicitEffect(f) !== null);
+    if (kind === "day" && flagged && structure.recognized) kind = "structure";
+    const autoMerge = kind === "order" || kind === "structure" || (kind === "instant" && structure.recognized);
+    const lotCounts = new Set(details.legs.map(l => l.lots));
+    const rounds = lotCounts.size === 1 ? [...lotCounts][0]! : 0;
+    const hint = kind === "day" ? sameDayShapeHint(fills) : null;
     const basis = kind === null ? "" : kind === "order"
       ? `同一多腿订单的 ${clusterGroups.length} 腿（订单 ${[...new Set(fills.flatMap(f => f.orderGroupId ? [f.orderGroupId] : []))].join("、")}）；${structure.recognized ? `开仓结构识别为“${structure.label}”` : "结构未识别，按券商订单归为一笔策略"}。`
       : kind === "instant"
         ? `${clusterGroups.length} 腿于 ${first.openAt ?? "同一时刻"} 同秒开仓${first.closeAt ? "、同秒平仓" : ""}；${structure.recognized ? `识别为“${structure.label}”，自动合并` : "结构未识别，仅建议合并"}。`
-        : `同账户、同标的的 ${clusterGroups.length} 个周期在 ${first.openDay ?? "同一日"} 同日开仓${first.closeDay ? "、同日退出" : ""}，但缺少秒级时间与订单号，不自动合并，需人工确认。`;
+        : kind === "structure"
+          ? `同账户、同标的的 ${clusterGroups.length} 腿在 ${first.openDay ?? "同一日"} 同日开仓${first.closeDay ? "、同日平仓" : ""}，开平标记来自券商（已平仓批次 / 当日订单），结构识别为“${baseStrategyLabel(structure.label)}”，自动合并${rounds > 1 ? `；各腿 ${rounds} 个批次，缺少秒级时间未拆分为独立轮次` : ""}。`
+          : `同账户、同标的的 ${clusterGroups.length} 个周期在 ${first.openDay ?? "同一日"} 同日开仓${first.closeDay ? "、同日退出" : ""}，但缺少秒级时间与订单号，不自动合并，需人工确认。${hint ? `${hint}；券商开平标记（Tradier 已平仓批次通常 T+1 到达）补齐后可自动识别合并。` : ""}`;
     return { groups: clusterGroups, evidence: kind, underlying: first.underlying, accountKey: first.account, structure, autoMerge, basis };
   });
 }

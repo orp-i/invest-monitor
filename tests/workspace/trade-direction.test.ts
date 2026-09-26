@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountPerformance, BrokerSnapshotSchema, brokerPositionEffect, directionLabel, executionAction, marketDirection, quantityDirection, reviewExecutionDetails, tradingCaseMetrics, type ReviewFill, type TradingCase } from "@invest/domain";
+import { accountPerformance, BrokerSnapshotSchema, brokerPositionEffect, directionLabel, executionAction, marketDirection, quantityDirection, reviewExecutionDetails, SAME_DAY_EVIDENCE_SUFFIX, tradingCaseMetrics, type ReviewFill, type TradingCase } from "@invest/domain";
 const fill = (id: string, side: "buy" | "sell", price: string, at: string, effect?: "open" | "close", symbol = "NVDA260918P00225000"): ReviewFill => ({ id, transactionId: id, source: "ibkr", instrumentKey: symbol, symbol, side, price, quantity: "1", multiplier: "100", feeCost: "1", currency: "USD", occurredAt: at, timePrecision: "instant", positionEffect: effect });
 const entry = (fills: ReviewFill[]): TradingCase => ({ id: "test", title: "test", strategy: "test", instrumentType: "option", horizon: "unspecified", historyComplete: true, fillIds: fills.map(f => f.id), fills, createdAt: "2026-09-01", updatedAt: "2026-09-01", plans: [], evidence: [], events: [], assessments: [], linkHistory: [] });
 const open = "2026-09-01T15:00:00Z", close = "2026-09-02T15:00:00Z";
@@ -52,6 +52,20 @@ describe("long/short contracts and underlying exposure", () => {
     expect(reviewExecutionDetails(bullish).direction).toBe("看多认购价差（买低卖高行权价）");
     bullish.fills.forEach(f=>{f.side=f.side==="buy"?"sell":"buy";});
     expect(reviewExecutionDetails(bullish).direction).toBe("看空认购价差（卖低买高行权价）");
+  });
+  it("recognizes an automatic case whose date-only openings carry broker lot flags and whose closes carry order instants", () => {
+    const c = entry([
+      { ...fill("o1", "buy", "3.55", "2026-09-16", "open", "UCO261016C00055000"), timePrecision: "day", lotId: "lot:a" },
+      { ...fill("c1", "sell", "2.32", "2026-09-23T17:40:07.507Z", "close", "UCO261016C00055000"), lotId: "lot:a", orderGroupId: "147475261" },
+      { ...fill("o2", "sell", "1.35", "2026-09-16", "open", "UCO261016C00065000"), timePrecision: "day", lotId: "lot:b" },
+      { ...fill("c2", "buy", "0.62", "2026-09-23T17:40:07.507Z", "close", "UCO261016C00065000"), lotId: "lot:b", orderGroupId: "147475261" },
+    ]);
+    c.id = "auto-case-uco"; // an automatic merge, so not a user-confirmed grouping
+    const d = reviewExecutionDetails(c);
+    expect(d.direction).toBe(`看多认购价差（买低卖高行权价）${SAME_DAY_EVIDENCE_SUFFIX}`);
+    expect(d.strategy.timing).toBe("same-day"); expect(d.legs.map(l => l.lots)).toEqual([1, 1]);
+    c.fills[0]!.positionEffect = undefined; // one unflagged fill removes the broker-evidence path
+    expect(reviewExecutionDetails(c).strategy.referenceUrl).toBeNull();
   });
   it("recognizes a current short opening from negative inventory without reversing the broker buy/sell side", () => {
     const t = { id:"sell",externalId:null,symbol:"RDDT",side:"sell" as const,quantity:"2",price:"150",fees:"1",currency:"USD",tradedAt:open,timePrecision:"instant" as const,assetType:"STK" };

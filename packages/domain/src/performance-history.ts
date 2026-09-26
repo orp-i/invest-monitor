@@ -60,28 +60,37 @@ export interface PerformanceOhlc { open: string; high: string; low: string; clos
 export interface PerformanceDailyCandle {
   day: string; time: number; totalNet: PerformanceOhlc; unrealizedNet: PerformanceOhlc;
   samples: number; firstCapturedAt: string; lastCapturedAt: string; complete: boolean; basis: string;
+  /** The accounting scope (fills, positions, statements) changed within this day or since the previous candle. */
+  basisChanged: boolean;
 }
-// Use only persisted observations, never an API read's live estimate. The last
-// contiguous accounting scope is retained; imports/cost changes must not create
-// a candle spanning unrelated bases. High/low are observed, not full-day extrema.
-export function dailyPerformanceCandles(samples: readonly PerformanceSample[], timeZone = PERFORMANCE_TIME_ZONE): PerformanceDailyCandle[] {
+export interface DailyCandleOptions {
+  /** "all" (default) charts every persisted observation as the total historical change; "latest-basis" keeps only the last contiguous accounting scope. */
+  scope?: "all" | "latest-basis";
+}
+// Use only persisted observations, never an API read's live estimate. Every saved sample is charted so
+// the curve shows the total change over the whole history; a change of accounting scope (new statement,
+// cost revision) is flagged on the candle instead of cutting the series. High/low are observed, not full-day extrema.
+export function dailyPerformanceCandles(samples: readonly PerformanceSample[], timeZone = PERFORMANCE_TIME_ZONE, options: DailyCandleOptions = {}): PerformanceDailyCandle[] {
   const ordered = [...new Map(samples.filter(s => Number.isFinite(Date.parse(s.capturedAt))).map(s => [Date.parse(s.capturedAt), s])).values()].sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
   const basis = ordered.at(-1)?.basis;
-  const cutoff = ordered.reduce((last, s, i) => s.basis !== basis ? i : last, -1);
+  const cutoff = options.scope === "latest-basis" ? ordered.reduce((last, s, i) => s.basis !== basis ? i : last, -1) : -1;
   const days = new Map<string, PerformanceDailyCandle>();
+  let previousBasis: string | undefined;
   for (const sample of ordered.slice(cutoff + 1)) {
     const p = partsAt(Date.parse(sample.capturedAt), timeZone), day = `${p.year}-${p.month}-${p.day}`;
     const row = days.get(day);
     const initial = (value: string): PerformanceOhlc => ({ open: value, high: value, low: value, close: value });
-    if (!row) days.set(day, { day, time: Date.parse(`${day}T00:00:00Z`), totalNet: initial(sample.totalNet), unrealizedNet: initial(sample.unrealizedNet), samples: 1, firstCapturedAt: sample.capturedAt, lastCapturedAt: sample.capturedAt, complete: sample.complete, basis: sample.basis });
+    const changed = previousBasis !== undefined && sample.basis !== previousBasis;
+    if (!row) days.set(day, { day, time: Date.parse(`${day}T00:00:00Z`), totalNet: initial(sample.totalNet), unrealizedNet: initial(sample.unrealizedNet), samples: 1, firstCapturedAt: sample.capturedAt, lastCapturedAt: sample.capturedAt, complete: sample.complete, basis: sample.basis, basisChanged: changed });
     else {
       for (const series of ["totalNet", "unrealizedNet"] as const) {
         row[series].high = Decimal.max(row[series].high, sample[series]).toFixed();
         row[series].low = Decimal.min(row[series].low, sample[series]).toFixed();
         row[series].close = sample[series];
       }
-      row.samples++; row.lastCapturedAt = sample.capturedAt; row.complete &&= sample.complete;
+      row.samples++; row.lastCapturedAt = sample.capturedAt; row.complete &&= sample.complete; row.basis = sample.basis; row.basisChanged ||= changed;
     }
+    previousBasis = sample.basis;
   }
   return [...days.values()];
 }

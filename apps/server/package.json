@@ -1,6 +1,6 @@
 {
   "name": "@invest/server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "exports": {
     ".": {
@@ -12,13 +12,13 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@invest/adapters": "0.1.0",
-    "@invest/collector": "0.1.0",
-    "@invest/config": "0.1.0",
-    "@invest/domain": "0.1.0",
-    "@invest/egress": "0.1.0",
-    "@invest/intel": "0.1.0",
-    "@invest/storage": "0.1.0",
+    "@invest/adapters": "0.2.0",
+    "@invest/collector": "0.2.0",
+    "@invest/config": "0.2.0",
+    "@invest/domain": "0.2.0",
+    "@invest/egress": "0.2.0",
+    "@invest/intel": "0.2.0",
+    "@invest/storage": "0.2.0",
     "fast-xml-parser": "^5.2.5",
     "undici": "^7.0.0"
   }

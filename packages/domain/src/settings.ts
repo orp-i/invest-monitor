@@ -51,7 +51,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
     secret("DAILY_LLM_API_KEY", "API Key", "仅保存在服务端。"),
     { key: "DAILY_LLM_MODEL", label: "模型", kind: "text", required: true, placeholder: "deepseek-chat", help: "服务商的模型名称。" },
     { key: "DAILY_LLM_TIMEOUT_MS", label: "超时（毫秒）", kind: "number", required: false, default: "180000", min: 1000, max: 300000, help: "单次推理请求超时。" },
-    { key: "DAILY_LLM_MAX_OUTPUT_TOKENS", label: "输出 token 上限", kind: "number", required: false, default: "6000", min: 1000, max: 16000, help: "截断时会自动以两倍上限（≤16000）压缩重试一次。" },
+        { key: "DAILY_LLM_MAX_OUTPUT_TOKENS", label: "输出 token 上限", kind: "number", required: false, default: "0", min: 0, max: 400000, help: "0 表示不设上限（不发送 max_tokens，由服务商默认值决定）；填 1000–400000 则截断时自动以两倍上限压缩重试一次。推理模型的思考过程也计入输出。" },
     { key: "DAILY_LLM_EGRESS_PROFILE", label: "出口", kind: "select", required: false, default: "auto", options: [{ value: "auto", label: "自动比较直连与 VPN" }, { value: "direct", label: "直连" }, { value: "vpn", label: "VPN 代理" }, { value: "corp", label: "公司代理" }], help: "auto 会先读取模型列表比较可用性与延迟。" },
   ] },
   { id: "network", label: "网络出口", kind: "network", description: "券商同步（Tradier / IBKR / Schwab / Alpaca）使用的 HTTP 代理；留空直连。行情与新闻的出口在 config/portfolio.yaml 的 egressProfiles 中配置。", docsUrl: null, testable: false, fields: [

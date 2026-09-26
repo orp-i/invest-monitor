@@ -148,8 +148,9 @@ cd invest-monitor-<version>-linux-x64
 | `DAILY_LLM_API_KEY` | 未设置 | API Key |
 | `DAILY_LLM_MODEL` | 未设置 | 模型名称 |
 | `DAILY_LLM_TIMEOUT_MS` | `180000` | 单次推理请求超时（1000–300000） |
-| `DAILY_LLM_MAX_OUTPUT_TOKENS` | `6000` | 输出 token 上限（1000–16000）；截断时会自动以两倍上限压缩重试一次 |
+| `DAILY_LLM_MAX_OUTPUT_TOKENS` | `0` | 输出 token 上限；`0` 表示不设上限（不发送 `max_tokens`，由服务商默认值决定），填 1000–400000 则截断时自动以两倍上限压缩重试一次。推理模型（如 DeepSeek 带 reasoning 的模型）的思考过程也计入输出，过小的上限会截断长 JSON |
 | `DAILY_LLM_EGRESS_PROFILE` | `auto` | `auto`（比较直连与 VPN 后选择）/ `direct` / `vpn` / `corp` |
+| `REVIEW_MERGE_ADVICE_AUTO` | `1` | 券商同步后，待判断的多腿分组有变化时自动请求同一 LLM 给出按 SOP 的合并建议（30 分钟内最多一次）；`0` 表示只在复盘页手动触发 |
 
 **Docker 专用**
 

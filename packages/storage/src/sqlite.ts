@@ -139,6 +139,27 @@ abstract class SqliteDriverBase implements StorageDriver {
     }
   }
 
+  public async getTradingLessons(): Promise<import("@invest/domain").TradingLesson[]> {
+    return this.requireDatabase().prepare("SELECT lesson_json FROM trading_lessons ORDER BY updated_at DESC, id").all().map(row => JSON.parse(String(row.lesson_json)));
+  }
+
+  public async createTradingLesson(lesson: import("@invest/domain").TradingLesson): Promise<void> {
+    await this.withTransaction(async () => {
+      this.requireDatabase().prepare("INSERT INTO trading_lessons (id, category, status, updated_at, lesson_json) VALUES (?, ?, ?, ?, ?)").run(lesson.id, lesson.category, lesson.status, lesson.updatedAt, JSON.stringify(lesson));
+    });
+  }
+
+  public async updateTradingLesson(id: string, update: (lesson: import("@invest/domain").TradingLesson) => import("@invest/domain").TradingLesson): Promise<import("@invest/domain").TradingLesson | null> {
+    return this.withTransaction(async () => {
+      const db = this.requireDatabase();
+      const row = db.prepare("SELECT lesson_json FROM trading_lessons WHERE id = ?").get(id);
+      if (!row) return null;
+      const next = update(JSON.parse(String(row.lesson_json)));
+      db.prepare("UPDATE trading_lessons SET category = ?, status = ?, updated_at = ?, lesson_json = ? WHERE id = ?").run(next.category, next.status, next.updatedAt, JSON.stringify(next), id);
+      return next;
+    });
+  }
+
   public async createTradingCase(entry: TradingCase): Promise<void> {
     await this.withTransaction(async () => {
       this.requireDatabase().prepare("INSERT INTO trading_review_cases (id, updated_at, entry_json) VALUES (?, ?, ?)").run(entry.id, entry.updatedAt, JSON.stringify(entry));
@@ -303,6 +324,45 @@ abstract class SqliteDriverBase implements StorageDriver {
         const run: import("@invest/domain").DailyInferenceRun = JSON.parse(String(row.run_json));
         run.status = "failed"; run.completedAt = new Date().toISOString(); run.error = "服务重启中断了上次推理，请手动重新分析。";
         db.prepare("UPDATE daily_inference_runs SET status = ?, run_json = ? WHERE id = ?").run(run.status, JSON.stringify(run), run.id);
+      }
+    });
+  }
+
+  public async createMergeAdviceRun(run: import("@invest/domain").MergeAdviceRun): Promise<boolean> {
+    return this.withTransaction(async () => {
+      const db = this.requireDatabase();
+      if (db.prepare("SELECT id FROM review_merge_advice WHERE id = ?").get(run.id)) return false;
+      db.prepare("INSERT INTO review_merge_advice (id,created_at,status,input_hash,run_json) VALUES (?,?,?,?,?)").run(run.id, run.createdAt, run.status, run.inputHash, JSON.stringify(run));
+      return true;
+    });
+  }
+
+  public async finishMergeAdviceRun(run: import("@invest/domain").MergeAdviceRun): Promise<void> {
+    await this.withTransaction(async () => {
+      const db = this.requireDatabase();
+      if (run.status === "running") throw new Error("Cannot finish a running advice run");
+      if (db.prepare("SELECT status FROM review_merge_advice WHERE id = ?").get(run.id)?.status !== "running") return;
+      db.prepare("UPDATE review_merge_advice SET status = ?, run_json = ? WHERE id = ?").run(run.status, JSON.stringify(run), run.id);
+    });
+  }
+
+  public async getMergeAdviceRun(id: string): Promise<import("@invest/domain").MergeAdviceRun | null> {
+    const row = this.requireDatabase().prepare("SELECT run_json FROM review_merge_advice WHERE id = ?").get(id);
+    return row ? JSON.parse(String(row.run_json)) : null;
+  }
+
+  public async getMergeAdviceRuns(limit: number): Promise<import("@invest/domain").MergeAdviceRunSummary[]> {
+    return this.requireDatabase().prepare("SELECT json_remove(run_json, '$.input') AS summary_json, json_array_length(run_json, '$.input.clusters') AS clusters, json_array_length(run_json, '$.input.fills') AS fills FROM review_merge_advice ORDER BY created_at DESC, id DESC LIMIT ?")
+      .all(Math.min(50, Math.max(1, limit))).map(row => ({ ...JSON.parse(String(row.summary_json)), clusters: Number(row.clusters ?? 0), fills: Number(row.fills ?? 0) }));
+  }
+
+  public async recoverMergeAdviceRuns(): Promise<void> {
+    await this.withTransaction(async () => {
+      const db = this.requireDatabase();
+      for (const row of db.prepare("SELECT run_json FROM review_merge_advice WHERE status = 'running'").all()) {
+        const run: import("@invest/domain").MergeAdviceRun = JSON.parse(String(row.run_json));
+        run.status = "failed"; run.completedAt = new Date().toISOString(); run.error = "服务重启中断了上次分析，请重新分析。";
+        db.prepare("UPDATE review_merge_advice SET status = ?, run_json = ? WHERE id = ?").run(run.status, JSON.stringify(run), run.id);
       }
     });
   }

@@ -1,6 +1,6 @@
 {
   "name": "@invest/storage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "exports": {
     ".": {
@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json && cp schema.sql dist/schema.sql"
   },
   "dependencies": {
-    "@invest/domain": "0.1.0",
+    "@invest/domain": "0.2.0",
     "better-sqlite3": "^12.4.1"
   }
 }

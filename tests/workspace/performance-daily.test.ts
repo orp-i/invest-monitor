@@ -47,11 +47,13 @@ describe("twice-daily profit history", () => {
     expect(bars[0]).toMatchObject({ day: "2026-09-11", time: Date.parse("2026-09-11T00:00:00Z"), samples: 3, complete: false, totalNet: { open: "-10.00000001", high: "-2", low: "-10.00000001", close: "-5" }, unrealizedNet: { open: "3", high: "4", low: "1", close: "4" } });
     expect(bars[1]).toMatchObject({ day: "2026-09-12", samples: 1, totalNet: { open: "-8", high: "-8", low: "-8", close: "-8" } });
   });
-  it("does not bridge gaps or accounting changes, even when a prior basis later returns", () => {
+  it("charts the whole history as total change, flags accounting-scope changes and never bridges gaps", () => {
     const rows = [sample("2026-09-09T16:00:00Z", "999"), sample("2026-09-10T16:00:00Z", "500", { basis: "b" }), sample("2026-09-11T16:00:00Z", "-1"), sample("2026-09-13T04:00:00Z", "-2")];
-    expect(dailyPerformanceCandles(rows).map(d => [d.day, d.totalNet.close])).toEqual([["2026-09-12", "-1"], ["2026-09-13", "-2"]]);
+    expect(dailyPerformanceCandles(rows).map(d => [d.day, d.totalNet.close, d.basisChanged])).toEqual([["2026-09-10", "999", false], ["2026-09-11", "500", true], ["2026-09-12", "-1", true], ["2026-09-13", "-2", false]]);
+    // The previous "last contiguous scope" view stays available on request.
+    expect(dailyPerformanceCandles(rows, undefined, { scope: "latest-basis" }).map(d => d.day)).toEqual(["2026-09-12", "2026-09-13"]);
     rows[3] = sample("2026-09-11T20:00:00Z", "20", { basis: "new" });
-    expect(dailyPerformanceCandles(rows)[0]).toMatchObject({ samples: 1, totalNet: { open: "20", close: "20", high: "20", low: "20" } });
+    expect(dailyPerformanceCandles(rows).at(-1)).toMatchObject({ day: "2026-09-12", samples: 2, basisChanged: true, basis: "new", totalNet: { open: "-1", close: "20", high: "20", low: "-1" } });
   });
   it("skips in-slot legacy samples and records once at the next slot, including after restart", async () => {
     let now = Date.parse("2026-09-12T03:59:00Z");

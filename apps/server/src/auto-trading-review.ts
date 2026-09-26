@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Decimal } from "decimal.js";
-import { brokerReportDay, tradierSymbol, clusterReviewGroups, caseUnreviewed, type ReviewFill, type TradingCase, type StrategyCluster } from "@invest/domain";
+import { baseStrategyLabel, brokerReportDay, tradierSymbol, clusterReviewGroups, caseUnreviewed, type ReviewFill, type TradingCase, type StrategyCluster } from "@invest/domain";
 import type { StorageDriver } from "@invest/storage";
 import { availableReviewFills } from "./trading-review.js";
 
@@ -42,10 +42,10 @@ export function pairedReviewFills(fills: ReviewFill[]): ReviewFill[][] {
 const queues = new WeakMap<StorageDriver, Promise<void>>();
 export const AUTO_STRATEGY = "自动开平仓配对（意图待复盘）";
 const autoCaseId = (fills: ReviewFill[]) => "auto-case-" + createHash("sha256").update(JSON.stringify(fills.map(f => f.id).sort())).digest("hex");
-const clusterTitle = (cluster: StrategyCluster, first: ReviewFill) => `${first.sourceLabel ?? first.source.toUpperCase()} · ${cluster.underlying} · ${cluster.structure.recognized ? cluster.structure.label : `${cluster.groups.length} 腿组合`} · ${brokerReportDay(first.occurredAt)}`;
+const clusterTitle = (cluster: StrategyCluster, first: ReviewFill) => `${first.sourceLabel ?? first.source.toUpperCase()} · ${cluster.underlying} · ${cluster.structure.recognized ? baseStrategyLabel(cluster.structure.label) : `${cluster.groups.length} 腿组合`} · ${brokerReportDay(first.occurredAt)}`;
 
-/** Creates and extends automatic cases from pairing cycles; multi-leg clusters with order or same-second
- * evidence become one case, and earlier unreviewed auto cases are merged once such evidence appears. */
+/** Creates and extends automatic cases from pairing cycles; multi-leg clusters with order, same-second or
+ * broker-flagged same-day structure evidence become one case, and earlier unreviewed auto cases are merged once such evidence appears. */
 export function syncAutomaticTradingCases(storage: StorageDriver): Promise<void> {
   const run = (queues.get(storage) ?? Promise.resolve()).catch(() => {}).then(async () => {
     const [fills, cases] = await Promise.all([availableReviewFills(storage), storage.getTradingCases()]);

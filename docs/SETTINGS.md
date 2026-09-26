@@ -65,8 +65,10 @@
 | llm | `DAILY_LLM_API_KEY` | secret | 仅保存在服务端 |
 | llm | `DAILY_LLM_MODEL` * | text | 服务商的模型名称 |
 | llm | `DAILY_LLM_TIMEOUT_MS` | number | 1000–300000，默认 180000 |
-| llm | `DAILY_LLM_MAX_OUTPUT_TOKENS` | number | 1000–16000，默认 6000 |
+| llm | `DAILY_LLM_MAX_OUTPUT_TOKENS` | number | `0` 不设上限（默认）或 1000–400000 |
 | llm | `DAILY_LLM_EGRESS_PROFILE` | select | `auto` / `direct` / `vpn` / `corp`，默认 `auto` |
+
+复盘页的“SOP 合并建议”复用这一组 LLM 配置；`REVIEW_MERGE_ADVICE_AUTO`（仅环境变量，默认 `1`）控制券商同步后是否自动分析。
 | network | `BROKER_EGRESS_PROXY_URL` | url | 留空表示直连；Docker 内访问宿主机代理用 `host.docker.internal` |
 
 `url` 类型字段的校验规则统一：必须是 `http`/`https`，不能带用户名、密码或 `#` 片段；`number` 类型必须是落在 `min`/`max` 区间内的整数；`select` 只能是给定选项之一；任何字段都不能包含换行，长度上限 4000 字符。

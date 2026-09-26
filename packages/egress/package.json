@@ -1,6 +1,6 @@
 {
   "name": "@invest/egress",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "exports": {
     ".": {
@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@invest/config": "0.1.0",
+    "@invest/config": "0.2.0",
     "undici": "^7.0.0"
   }
 }

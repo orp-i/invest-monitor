@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
-  reviewContent as content, tradingCaseMetrics, reviewExecutionDetails, catalystExample, optionIdentity, brokerReportDay, MARKET_STANCES,
-  type TradingCase, type TradingCaseInput, type TradingCaseProfile, type TradingEvidenceInput, type MarketDailySummary, type MergeSuggestion,
+  reviewContent as content, tradingCaseMetrics, reviewExecutionDetails, catalystExample, optionIdentity, brokerReportDay, MARKET_STANCES, LESSON_CATEGORIES,
+  type TradingCase, type TradingCaseInput, type TradingCaseProfile, type TradingEvidenceInput, type MarketDailySummary, type MergeSuggestion, type TradingLesson, type TradingLessonInput, type LessonCategory,
   type TradingEventInput, type TradingAssessmentInput, type ReviewFill, type WeeklyReview,
-  type StatementImport,
+  type StatementImport, type MergeAdviceRunSummary, type DailyLlmStatus,
 } from "@invest/domain";
 import { getJson, writeJson } from "./api";
 import { navigateRoute, parseRoute, replaceRoute, routeHash, useRoute } from "./route";
@@ -14,8 +14,14 @@ import { formatMoney, formatTimestamp } from "./format";
 import type { NewsItem } from "./types";
 
 type FillChoice = ReviewFill & { caseId: string | null };
-interface ReviewData { statements: (Omit<StatementImport, "fills"> & { fillCount: number })[]; cases: TradingCase[]; fills: FillChoice[]; weekly: WeeklyReview[]; research: { id: string; title: string; topic: string }[]; suggestions?: MergeSuggestion[] }
-const EVIDENCE = { order: "同一多腿订单", instant: "同秒开仓", day: "同日同标的（需人工确认）" };
+interface ReviewData { statements: (Omit<StatementImport, "fills"> & { fillCount: number })[]; cases: TradingCase[]; fills: FillChoice[]; weekly: WeeklyReview[]; research: { id: string; title: string; topic: string }[]; suggestions?: MergeSuggestion[]; lessons?: TradingLesson[] }
+const freshLesson = (category: LessonCategory = "option", caseIds: string[] = []): TradingLessonInput => ({ category, title: "", body: "", trigger: "", action: "", caseIds, tags: [], status: "active" });
+const lessonInput = (l: TradingLesson): TradingLessonInput => ({ category: l.category, title: l.title, body: l.body, trigger: l.trigger, action: l.action, caseIds: l.caseIds, tags: l.tags, status: l.status });
+const EVIDENCE = { order: "同一多腿订单", instant: "同秒开仓", structure: "同日结构（券商开平标记）", day: "同日同标的（需人工确认）" };
+interface AdviceState { provider: DailyLlmStatus; auto: boolean; sop: { version: string; rules: string[] }; candidates: { key: string; underlying: string; reason: string; structure: string; hint: string | null; caseIds: string[]; fills: number }[]; warnings: string[]; latest: MergeAdviceRunSummary | null; runs: MergeAdviceRunSummary[] }
+const DIRECTIONS = { bullish: "看多", bearish: "看空", neutral: "中性区间", volatility: "双向波动", mixed: "多空混合", unknown: "方向待核实" };
+const KINDS = { merge: "建议合并", "keep-separate": "建议保持独立", "split-review": "建议人工拆分" };
+const CONFIDENCE = { high: "高", medium: "中", low: "低" };
 type Intent = { kind: "curve" | "psychology"; id: string } | null;
 const HORIZONS = { intraday: "日内", swing: "波段", position: "中长线", unspecified: "待明确" };
 const TYPES = { stock: "股票 / ETF", option: "期权", crypto: "加密资产", mixed: "多工具组合", other: "其他" };
@@ -27,7 +33,7 @@ const iso = (value: FormDataEntryValue | null) => value ? new Date(String(value)
 const value = (data: FormData, key: string) => String(data.get(key) ?? "");
 const timezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 const toggle = (items: string[], item: string) => items.includes(item) ? items.filter(v => v !== item) : [...items, item];
-const TABS = ["cases", "weekly", "learning", "calculator"];
+const TABS = ["cases", "lessons", "weekly", "learning", "calculator"];
 const AUTO_STRATEGY = "自动开平仓配对（意图待复盘）";
 const SORTS = { opened: "最近开仓", closed: "最近退出", review: "等待复盘优先", pnl: "净盈亏" };
 const unreviewed = (c: TradingCase) => !c.plans.length && !c.evidence.length && !c.events.length && !c.assessments.length;
@@ -37,6 +43,82 @@ const awaitingReview = (c: TradingCase) => tradingCaseMetrics(c).state === "clos
 // Readable label for OCC option symbols such as SPY260914P00762000; stored titles are left unchanged.
 const contractLabel = (symbol: string) => { const o = optionIdentity(symbol); return o ? `${o.underlying} · 20${o.expiry.slice(0, 2)}-${o.expiry.slice(2, 4)}-${o.expiry.slice(4)} 到期 · ${o.type === "C" ? "Call" : "Put"} ${o.strike}` : null; };
 const caseContracts = (c: TradingCase) => [...new Set(c.fills.map(f => f.symbol))].map(contractLabel).filter((v): v is string => !!v);
+
+function LessonsWorkspace({ lessons, cases, save, busy, focusCaseId, onOpenCase }: { lessons: TradingLesson[]; cases: TradingCase[]; save: Save; busy: boolean; focusCaseId?: string; onOpenCase: (id: string) => void }) {
+  const [category, setCategory] = useState<"all" | LessonCategory>("all");
+  const [showRetired, setShowRetired] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState<TradingLessonInput>(() => freshLesson("option", focusCaseId ? [focusCaseId] : []));
+  const [tagText, setTagText] = useState("");
+  // Arriving from a case detail ("记录这笔交易的经验") opens the form with that case linked.
+  useEffect(() => { if (focusCaseId) { setEditing("new"); setDraft(d => ({ ...freshLesson(d.category, [focusCaseId]) })); setTagText(""); } }, [focusCaseId]);
+  const shown = (l: TradingLesson) => showRetired || l.status === "active";
+  const visible = lessons.filter(l => (category === "all" || l.category === category) && shown(l)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const caseTitle = (id: string) => cases.find(c => c.id === id)?.title ?? id;
+  const startEdit = (l: TradingLesson) => { setEditing(l.id); setDraft(lessonInput(l)); setTagText(l.tags.join(", ")); };
+  const parseTags = (text: string) => [...new Set(text.split(/[,，\s]+/).map(t => t.trim()).filter(Boolean))].slice(0, 20);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const body = { ...draft, tags: parseTags(tagText) };
+    const ok = editing === "new" ? await save("/api/trading-review/lessons", body) : await save(`/api/trading-review/lessons/${editing}`, { ...body, expectedRevision: lessons.find(l => l.id === editing)?.revision ?? 1 });
+    if (ok) { setEditing(null); setDraft(freshLesson(draft.category)); setTagText(""); }
+  };
+  const setStatus = (l: TradingLesson, status: TradingLessonInput["status"]) => save(`/api/trading-review/lessons/${l.id}`, { ...lessonInput(l), status, expectedRevision: l.revision });
+  const count = (k?: LessonCategory) => lessons.filter(l => shown(l) && (!k || l.category === k)).length;
+  return <div className="tr-lessons">
+    <div className="tr-row tr-lessons-heading"><div><p className="eyebrow">TRADING LESSONS</p><h3>交易经验</h3><p className="muted">按期权、股票、对冲设置三类显式记录每次交易学到的东西：适用场景与下次动作。可关联交易档案；修改保留历史；不再适用的经验标记停用而不删除。</p></div><button className="primary-button" onClick={() => { setEditing("new"); setDraft(freshLesson(category === "all" ? "option" : category, focusCaseId ? [focusCaseId] : [])); setTagText(""); }}>＋ 记录经验</button></div>
+    <div className="tr-tabs" role="tablist" aria-label="经验分类">{([["all", `全部 ${count()}`], ...Object.entries(LESSON_CATEGORIES).map(([k, v]) => [k, `${v} ${count(k as LessonCategory)}`])] as [string, string][]).map(([id, title]) => <button role="tab" key={id} aria-selected={category === id} onClick={() => setCategory(id as "all" | LessonCategory)}>{title}</button>)}<Check checked={showRetired} onChange={setShowRetired}>显示已停用</Check></div>
+    {editing && <form className="tr-form tr-surface" onSubmit={submit}>
+      <div className="tr-full tr-row"><h4>{editing === "new" ? "新经验" : "修改经验（保留此前版本）"}</h4><button type="button" className="text-button" onClick={() => setEditing(null)}>收起</button></div>
+      <Field label="分类"><select value={draft.category} onChange={e => setDraft({ ...draft, category: e.target.value as LessonCategory })}>{Object.entries(LESSON_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
+      <Field label="状态"><select value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value as TradingLessonInput["status"] })}><option value="active">有效</option><option value="retired">已停用</option></select></Field>
+      <Field label="一句话标题" wide><input required maxLength={200} value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} placeholder="例如：0DTE 认购价差不在开盘前 30 分钟追价" /></Field>
+      <Field label="经验内容（发生了什么、为什么）" wide><textarea required maxLength={10000} value={draft.body} onChange={e => setDraft({ ...draft, body: e.target.value })} /></Field>
+      <Field label="适用场景 / 触发条件" wide><textarea maxLength={10000} value={draft.trigger} onChange={e => setDraft({ ...draft, trigger: e.target.value })} placeholder="什么情况下这条经验成立" /></Field>
+      <Field label="下次动作 / 避免事项" wide><textarea maxLength={10000} value={draft.action} onChange={e => setDraft({ ...draft, action: e.target.value })} placeholder="具体做什么或不做什么" /></Field>
+      <Field label="标签（逗号分隔）"><input value={tagText} onChange={e => setTagText(e.target.value)} placeholder="例如：SPY, 0DTE, 价差" /></Field>
+      <Field label="关联交易档案（可多选）" wide><select multiple value={draft.caseIds} onChange={e => setDraft({ ...draft, caseIds: [...e.target.selectedOptions].map(o => o.value) })} size={Math.min(6, Math.max(3, cases.length))}>{[...cases].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(c => <option key={c.id} value={c.id}>{c.title}</option>)}</select></Field>
+      <div className="tr-full"><button className="primary-button" disabled={busy}>{editing === "new" ? "保存经验" : "保存修改"}</button></div>
+    </form>}
+    {visible.length ? <ul className="tr-lesson-list">{visible.map(l => <li key={l.id} className="tr-surface">
+      <header><strong>{l.title}</strong><span className="tr-pill">{LESSON_CATEGORIES[l.category]}</span>{l.status === "retired" && <span className="tr-pill">已停用</span>}<time>更新于 {formatTimestamp(l.updatedAt)}{l.revision > 1 ? ` · 第 ${l.revision} 版` : ""}</time></header>
+      <p className="tr-lesson-body">{l.body}</p>
+      {l.trigger && <p><strong>适用场景：</strong>{l.trigger}</p>}{l.action && <p><strong>下次动作：</strong>{l.action}</p>}
+      {(l.tags.length > 0 || l.caseIds.length > 0) && <p className="muted">{l.tags.map(t => `#${t}`).join(" ")}{l.caseIds.length ? <> · 关联：{l.caseIds.map(id => <button key={id} type="button" className="text-button" onClick={() => onOpenCase(id)}>{caseTitle(id)}</button>)}</> : null}</p>}
+      <p className="tr-lesson-actions"><button type="button" className="text-button" disabled={busy} onClick={() => startEdit(l)}>修改</button>{l.status === "active" ? <button type="button" className="text-button" disabled={busy} onClick={() => void setStatus(l, "retired")}>标记停用</button> : <button type="button" className="text-button" disabled={busy} onClick={() => void setStatus(l, "active")}>恢复有效</button>}</p>
+      {l.history.length > 0 && <details className="tr-data-notes"><summary>修改历史 · {l.history.length} 次</summary>{l.history.map(h => <p key={h.recordedAt}>{formatTimestamp(h.recordedAt)} 之前：{LESSON_CATEGORIES[h.category]} · {h.title} · {h.body}{h.trigger ? ` · 场景：${h.trigger}` : ""}{h.action ? ` · 动作：${h.action}` : ""}</p>)}</details>}
+    </li>)}</ul> : <p className="empty-state">{lessons.length ? "该分类下还没有经验记录。" : "还没有经验记录。每次复盘后把可复用的结论记在这里，按期权、股票、对冲设置分类。"}</p>}
+  </div>;
+}
+
+function MergeAdvicePanel({ advice, cases, busy, onRun, onMerge, onSelect }: { advice: AdviceState | null; cases: TradingCase[]; busy: boolean; onRun: () => void; onMerge: (target: string, sources: string[]) => void; onSelect: (id: string) => void }) {
+  if (!advice) return null;
+  const latest = advice.latest;
+  const title = (id: string) => cases.find(c => c.id === id)?.title ?? id;
+  const running = latest?.status === "running";
+  return <details className="tr-notice tr-advice" open={!!latest && latest.status === "completed"}>
+    <summary><strong>SOP 合并建议 · 模型</strong>{advice.provider.configured ? ` ${advice.provider.model}` : "（未配置）"} · 待判断分组 {advice.candidates.length} 个{latest ? ` · 最近分析 ${formatTimestamp(latest.createdAt)}${running ? "（进行中）" : latest.status === "failed" ? "（失败）" : ""}` : ""}</summary>
+    <p className="muted">模型按 SOP 判断哪些成交属于同一策略、各腿开平角色与轮数；建议仅供人工确认，程序按净现金重新核算并核对结构，不改写成交。{advice.auto ? "券商同步后待判断分组有变化时自动分析一次。" : "自动分析已关闭。"} <button type="button" className="text-button" disabled={busy || running || !advice.provider.configured} onClick={onRun}>{running ? "分析中…" : "重新分析"}</button></p>
+    {!advice.provider.configured && <p className="muted">请先在“设置 → 日报 LLM”填写 API 地址、Key 与模型{advice.provider.missing.length ? `（缺少 ${advice.provider.missing.join("、")}）` : ""}。</p>}
+    {latest?.status === "failed" && <p className="inline-error" role="alert">{latest.error}</p>}
+    {latest?.status === "failed" && latest.attempts?.some(a => a.sample) && <details className="tr-data-notes"><summary>模型输出片段（诊断用，不是结果）</summary>{latest.attempts.filter(a => a.sample).map(a => <p key={a.startedAt}>{formatTimestamp(a.startedAt)} · {a.issue}：<code>{a.sample}</code></p>)}</details>}
+    {latest?.status === "completed" && latest.output && <>
+      <p>{latest.output.summary}</p>
+      {latest.proposals.length ? <ul className="tr-advice-list">{latest.proposals.map(p => <li key={p.id}>
+        <strong>{p.structure}</strong>（{DIRECTIONS[p.direction]} · 置信度{CONFIDENCE[p.confidence]}） · {KINDS[p.kind]} · {p.fillIds.length} 笔成交{p.netCash !== null ? ` · 净现金合计 ${formatMoney(p.netCash)} USD` : ""}{p.rounds ? ` · ${p.rounds} 轮` : ""}
+        <br />{p.rationale}
+        <br /><span className="muted">{[...p.checks, ...p.warnings].join("；")}{p.sopRules.length ? ` · ${p.sopRules.join("、")}` : ""}</span>
+        <br />{p.caseIds.map(id => <button key={id} type="button" className="text-button" onClick={() => onSelect(id)}>打开“{title(id)}”</button>)}
+        {p.actionable && <button type="button" className="text-button" disabled={busy} onClick={() => onMerge(p.actionable!.targetCaseId, p.actionable!.sourceCaseIds)}>按建议合并到“{title(p.actionable.targetCaseId)}”</button>}
+      </li>)}</ul> : <p className="muted">模型没有提出可执行的分组建议。</p>}
+      {!!latest.output.limitations.length && <p className="muted">局限：{latest.output.limitations.join("；")}</p>}
+      {latest.usage && <p className="muted">tokens：输入 {latest.usage.inputTokens ?? "—"} / 输出 {latest.usage.outputTokens ?? "—"}{latest.attempts && latest.attempts.length > 1 ? " · 含一次压缩重试" : ""}</p>}
+    </>}
+    {!!advice.candidates.length && <details className="tr-data-notes"><summary>待判断分组 {advice.candidates.length} 个</summary>{advice.candidates.map(c => <p key={c.key}>{c.underlying} · {c.reason}{c.hint ? ` · ${c.hint}` : ""} · {c.fills} 笔</p>)}</details>}
+    {!!advice.warnings.length && <p className="muted">{advice.warnings.join("；")}</p>}
+    <details className="tr-data-notes"><summary>SOP {advice.sop.version}</summary>{advice.sop.rules.map(r => <p key={r}>{r}</p>)}</details>
+  </details>;
+}
 
 export function startTradingReview(link: { transactionId?: string; newsId?: string }) {
   try { sessionStorage.setItem("invest:trading-review-link", JSON.stringify(link)); } catch { /* Navigation is still available. */ }
@@ -63,10 +145,14 @@ export const TradingReviewWorkspace = memo(function TradingReviewWorkspace({ new
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [advice, setAdvice] = useState<AdviceState | null>(null);
+  const loadAdvice = useCallback(async () => { try { setAdvice(await getJson<AdviceState>("/api/trading-review/advice")); } catch { /* The advice panel is optional; the journal still works. */ } }, []);
   const refresh = useCallback(async () => {
-    try { setData(await getJson<ReviewData>("/api/trading-review")); setError(""); }
+    try { setData(await getJson<ReviewData>("/api/trading-review")); setError(""); void loadAdvice(); }
     catch (e) { setError(e instanceof Error ? e.message : "读取失败"); }
-  }, []);
+  }, [loadAdvice]);
+  // While the model is working, poll the run every few seconds; stop as soon as it completes or fails.
+  useEffect(() => { if (advice?.latest?.status !== "running") return; const timer = setTimeout(() => void loadAdvice(), 4000); return () => clearTimeout(timer); }, [advice, loadAdvice]);
   useEffect(() => { const update = () => void refresh(); void refresh(); window.addEventListener("invest:broker-data-updated", update); return () => window.removeEventListener("invest:broker-data-updated", update); }, [refresh]);
   useEffect(() => {
     if (!data) return;
@@ -103,10 +189,13 @@ export const TradingReviewWorkspace = memo(function TradingReviewWorkspace({ new
   const entry = data.cases.find(c => c.id === selected) ?? sorted[0] ?? data.cases[0];
   return <div className="trading-review">
     <header className="tr-header"><div><p className="eyebrow">TRADING JOURNAL</p><h2>交易档案与逐笔复盘</h2><p>同步后按同账户、同标的自动配对开平仓；仅有日期的成交按数量归组，日内顺序待核实。</p></div><button className="primary-button" onClick={() => { setCreating(true); setTab("cases"); setDraft(freshCase()); }}>＋ 新建交易档案</button></header>
-    <div className="tr-stats"><Stat label="交易档案" value={String(data.cases.length)} /><Stat label="持仓中 / 待核对" value={String(data.cases.filter(c => ["open", "incomplete"].includes(tradingCaseMetrics(c).state)).length)} /><Stat label="等待复盘" value={String(data.cases.filter(awaitingReview).length)} note="点击筛选" onClick={() => { setFilter("review-due"); setQuery(""); setTab("cases"); }} /><Stat label="周报留存" value={String(data.weekly.length)} /></div>
-    <div className="tr-tabs" role="tablist" aria-label="复盘工作区">{[["cases", "交易档案"], ["weekly", "周末复盘"], ["learning", "图文学习"], ["calculator", "止盈算例"]].map(([id, title]) => <button role="tab" key={id} aria-selected={tab === id} onClick={() => setTab(id!)}>{title}</button>)}</div>
+    <div className="tr-stats"><Stat label="交易档案" value={String(data.cases.length)} /><Stat label="交易经验" value={String((data.lessons ?? []).filter(l => l.status === "active").length)} note="期权 / 股票 / 对冲设置" onClick={() => setTab("lessons")} /><Stat label="持仓中 / 待核对" value={String(data.cases.filter(c => ["open", "incomplete"].includes(tradingCaseMetrics(c).state)).length)} /><Stat label="等待复盘" value={String(data.cases.filter(awaitingReview).length)} note="点击筛选" onClick={() => { setFilter("review-due"); setQuery(""); setTab("cases"); }} /><Stat label="周报留存" value={String(data.weekly.length)} /></div>
+    <div className="tr-tabs" role="tablist" aria-label="复盘工作区">{[["cases", "交易档案"], ["lessons", "交易经验"], ["weekly", "周末复盘"], ["learning", "图文学习"], ["calculator", "止盈算例"]].map(([id, title]) => <button role="tab" key={id} aria-selected={tab === id} onClick={() => setTab(id!)}>{title}</button>)}</div>
     {error && <p className="inline-error" role="alert">{error}</p>}{notice && <p className="tr-notice" role="status">{notice}</p>}
     {tab === "cases" && <>
+      <MergeAdvicePanel advice={advice} cases={data.cases} busy={busy} onSelect={setSelected}
+        onRun={async () => { setBusy(true); setError(""); try { const reply = await writeJson<{ run: MergeAdviceRunSummary | null; message?: string }>("/api/trading-review/advice/run", "POST", {}); if (reply.message) setNotice(reply.message); await loadAdvice(); } catch (e) { setError(e instanceof Error ? e.message : "分析失败"); } finally { setBusy(false); } }}
+        onMerge={async (target, sources) => { const targetCase = data.cases.find(c => c.id === target); if (window.confirm(`按模型建议将 ${sources.length} 个档案合并到“${targetCase?.title ?? target}”？被合并档案将移除，此操作不可撤销。`)) { if (await save(`/api/trading-review/cases/${target}/merge`, { sourceCaseIds: sources })) setSelected(target); } }} />
       {!!data.suggestions?.length && <div className="tr-notice tr-suggestions"><strong>有 {data.suggestions.length} 组档案可能属于同一策略：</strong>{data.suggestions.map(s => { const target = data.cases.find(c => c.id === s.targetCaseId); return <button key={s.targetCaseId} type="button" className="text-button" onClick={() => setSelected(s.targetCaseId)}>{s.underlying} · {EVIDENCE[s.evidence]} · {s.sourceCaseIds.length + 1} 个档案 → {target?.title ?? s.targetCaseId}</button>; })}<span className="muted">同一订单或同秒开仓且结构可识别的腿已自动合并；这里列出的需要你确认。</span></div>}
       {data.statements.length > 0 && <details className="tr-data-notes"><summary>已导入 {data.statements.length} 份结单 · {data.statements.reduce((n, s) => n + s.fillCount, 0)} 笔成交</summary>{data.statements.map(s => <p key={s.id}>{s.fileName} · {s.broker} · {s.fillCount} 笔 · 费用 {s.feesTotal} · 净现金 {s.netCash} USD<br />{s.notes.join("；")}</p>)}</details>}
       {creating && <form className="tr-form tr-surface" onSubmit={async e => {
@@ -127,6 +216,7 @@ export const TradingReviewWorkspace = memo(function TradingReviewWorkspace({ new
         {!cases.length && <p className="empty-state">还没有符合条件的档案。</p>}
       </aside><main className="tr-case-detail">{entry ? <CaseDetail key={entry.id} entry={entry} data={data} news={news} intent={intent} clearIntent={() => setIntent(null)} newsId={newsId} clearNews={() => setNewsId(null)} save={save} busy={busy} /> : <div className="tr-empty tr-surface"><span className="tr-empty-mark">↗</span><h3>从一笔真实交易开始</h3><p>选择一笔档案，或将手动成交、Tradier 和 IBKR 成交归入同一策略。核对每笔成交的价格、费用与结果。</p><ol><li>成交：开仓、平仓与费用</li><li>执行：当时的观察与实际动作</li><li>复盘：过程评价与下次改进</li></ol><button className="secondary-button" onClick={() => setTab("learning")}>先阅读十种收益路径 →</button></div>}</main></div>
     </>}
+    {tab === "lessons" && <LessonsWorkspace lessons={data.lessons ?? []} cases={data.cases} save={save} busy={busy} focusCaseId={route.rest[1]} onOpenCase={setSelected} />}
     {tab === "weekly" && <WeeklyReviewWorkspace cases={data.cases} fills={data.fills} weekly={data.weekly} save={save} busy={busy} />}
     {tab === "learning" && <OriginalLearning onUse={useKnowledge} />}
     {tab === "calculator" && <CatalystCalculator />}
@@ -174,6 +264,7 @@ function CaseDetail({ entry, data, news, intent, clearIntent, newsId, clearNews,
       return asTarget ? <p className="tr-notice"><strong>建议合并：</strong>{asTarget.basis} 可并入 {asTarget.sourceCaseIds.length} 个无复盘记录的档案：{asTarget.sourceCaseIds.map(id => data.cases.find(c => c.id === id)?.title ?? id).join("、")}。<button type="button" className="text-button" disabled={busy} onClick={async () => { if (window.confirm(`将 ${asTarget.sourceCaseIds.length} 个档案合并到“${entry.title}”？被合并档案将移除，此操作不可撤销。`)) await submit("merge", { sourceCaseIds: asTarget.sourceCaseIds }); }}>按建议合并</button></p>
         : asSource && targetCase ? <p className="tr-notice">此档案可能与“{targetCase.title}”属于同一策略（{EVIDENCE[asSource.evidence]}）。<button type="button" className="text-button" onClick={() => replaceRoute("trading-review", "cases", targetCase.id)}>打开目标档案</button></p> : null; })()}
     {entry.pairingBasis?.startsWith("自动合并") && <p className="muted">{entry.pairingBasis}</p>}
+    {(() => { const linked = (data.lessons ?? []).filter(l => l.caseIds.includes(entry.id) && l.status === "active"); return <p className="tr-notice tr-case-lessons"><strong>交易经验：</strong>{linked.length ? linked.map(l => <span key={l.id}>{LESSON_CATEGORIES[l.category]} · {l.title}；</span>) : "这笔交易还没有记录经验。"}<button type="button" className="text-button" onClick={() => replaceRoute("trading-review", "lessons", entry.id)}>记录这笔交易的经验</button></p>; })()}
     {entry.strategy === AUTO_STRATEGY && !editingProfile && <p className="tr-notice">这是券商成交自动配对的档案。请补充真实的策略意图与持有周期，复盘结论才有依据。<button type="button" className="text-button" onClick={() => setEditingProfile(true)}>补充策略与周期</button></p>}
     {editingProfile && <form className="tr-form tr-surface tr-profile-form" onSubmit={async e => { e.preventDefault(); if (await submit("profile", profile)) setEditingProfile(false); }}>
       <div className="tr-full tr-row"><h4>档案资料</h4><span className="muted">修改会保留此前的值；成交、证据与复盘记录不受影响。</span></div>

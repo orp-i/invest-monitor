@@ -32,6 +32,7 @@ const INCLUDE_FILES = [
   "vitest.config.ts",
   "README.md",
   "README.en.md",
+  "CHANGELOG.md",
   "LICENSE",
   "SECURITY.md",
   "config/portfolio.example.yaml",

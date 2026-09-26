@@ -184,6 +184,8 @@ Monorepo 目录结构：
 
 ## 文档索引
 
+- [更新日志](CHANGELOG.md)：各版本的功能与口径变化。
+
 - [安装与部署](docs/INSTALL.md) — 三种安装方式、环境变量参考、升级备份、故障排查
 - [账号设置与 API](docs/SETTINGS.md) — 配置页、加密、REST 接口完整参考
 - [券商接入](docs/BROKERS.md) — 各券商申请步骤、IBKR Flex 字段、对账单 PDF 导入

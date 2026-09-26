@@ -3,10 +3,10 @@ import { z } from "zod";
 import { Decimal } from "decimal.js";
 import {
   TradingCaseInputSchema, TradingCaseProfileSchema, TradingCaseMergeSchema, TradingPlanInputSchema, TradingEvidenceInputSchema,
-  TradingEventInputSchema, TradingAssessmentInputSchema, WeeklyReviewInputSchema,
+  TradingEventInputSchema, TradingAssessmentInputSchema, WeeklyReviewInputSchema, TradingLessonInputSchema, TradingLessonUpdateSchema,
   tradingCaseMetrics, weeklyReviewMetrics, reviewContent, reviewCoachPrompt, brokerReportDay,
   expirationReviewFill, withBrokerExecutionDetails, tradierSymbol, brokerPositionEffect, mergeSuggestions,
-  type BrokerApiId, type ReviewFill, type TradingCase, type TradingPlan,
+  type BrokerApiId, type ReviewFill, type TradingCase, type TradingPlan, type TradingLesson,
 } from "@invest/domain";
 import { pairedReviewFills } from "./auto-trading-review.js";
 import type { StorageDriver } from "@invest/storage";
@@ -79,10 +79,35 @@ export async function tradingReviewRequest(method: string, path: string, body: u
   const now = new Date().toISOString();
   try {
     if (method === "GET" && path === "/api/trading-review") {
-      const [cases, fills, weekly, research, statements] = await Promise.all([currentTradingCases(storage), availableReviewFills(storage), storage.getWeeklyReviews(), storage.getResearchEntries(), storage.getStatementImports()]);
+      const [cases, fills, weekly, research, statements, lessons] = await Promise.all([currentTradingCases(storage), availableReviewFills(storage), storage.getWeeklyReviews(), storage.getResearchEntries(), storage.getStatementImports(), storage.getTradingLessons()]);
       const owners = new Map(cases.flatMap(c => c.fills.map(f => [f.id, c.id] as const)));
       const suggestions = mergeSuggestions(cases, pairedReviewFills(fills));
-      return { status: 200, body: { cases, suggestions, fills: fills.map(f => ({ ...f, caseId: owners.get(f.id) ?? null })), weekly, research: research.map(r => ({ id: r.id, title: r.title, topic: r.topic })), statements: statements.map(({ fills, ...s }) => ({ ...s, fillCount: fills.length })), contentVersion: reviewContent.contentVersion } };
+      return { status: 200, body: { cases, suggestions, fills: fills.map(f => ({ ...f, caseId: owners.get(f.id) ?? null })), weekly, research: research.map(r => ({ id: r.id, title: r.title, topic: r.topic })), statements: statements.map(({ fills, ...s }) => ({ ...s, fillCount: fills.length })), lessons, contentVersion: reviewContent.contentVersion } };
+    }
+    // Trading lessons: explicit, categorized experience notes. Edits keep the previous version and need the current revision.
+    const linkedCases = async (caseIds: string[]) => { if (!caseIds.length) return; const known = new Set((await storage.getTradingCases()).map(c => c.id)); if (caseIds.some(id => !known.has(id))) throw new Error("关联的档案不存在，请刷新后重新选择"); };
+    if (method === "GET" && path === "/api/trading-review/lessons") return { status: 200, body: { lessons: await storage.getTradingLessons() } };
+    if (method === "POST" && path === "/api/trading-review/lessons") {
+      const input = TradingLessonInputSchema.parse(body);
+      await linkedCases(input.caseIds);
+      const lesson: TradingLesson = { ...input, id: randomUUID(), createdAt: now, updatedAt: now, revision: 1, history: [] };
+      await storage.createTradingLesson(lesson);
+      return { status: 201, body: { lesson } };
+    }
+    const lessonMatch = /^\/api\/trading-review\/lessons\/([^/]+)$/.exec(path);
+    if (lessonMatch) {
+      if (method !== "POST") return { status: 405, body: { message: "经验记录只支持追加修改" } };
+      const { expectedRevision, ...input } = TradingLessonUpdateSchema.parse(body);
+      await linkedCases(input.caseIds);
+      let conflict = false;
+      const lesson = await storage.updateTradingLesson(lessonMatch[1]!, current => {
+        if (current.revision !== expectedRevision) { conflict = true; return current; }
+        const { id: _id, createdAt: _createdAt, updatedAt: previousAt, revision: _revision, history: _history, ...previous } = current;
+        return { ...current, ...input, updatedAt: now, revision: current.revision + 1, history: [...current.history, { ...previous, recordedAt: previousAt }] };
+      });
+      if (!lesson) return { status: 404, body: { message: "经验记录不存在" } };
+      if (conflict) return { status: 409, body: { message: "经验已被更新，请刷新后再修改" } };
+      return { status: 200, body: { lesson } };
     }
     if (method === "POST" && path === "/api/trading-review/cases") {
       const input = TradingCaseInputSchema.parse(body);
@@ -194,7 +219,7 @@ export async function tradingReviewRequest(method: string, path: string, body: u
     if (error instanceof z.ZodError) return { status: 400, body: { message: error.issues.map(i => i.message).join("；") } };
     // Only our domain validation messages are exposed, never driver details.
     const message = error instanceof Error ? error.message : "";
-    const safe = /^(同一成交|成交已|所选案例|引用的证据|实际事件|计划已有|新闻已|宏观判断不存在|待合并档案|不能合并)/.test(message);
+    const safe = /^(同一成交|成交已|所选案例|引用的证据|实际事件|计划已有|新闻已|宏观判断不存在|待合并档案|不能合并|关联的档案)/.test(message);
     return { status: safe ? 409 : 500, body: { message: safe ? message : "复盘保存失败，请重试；原记录已保留" } };
   }
 }

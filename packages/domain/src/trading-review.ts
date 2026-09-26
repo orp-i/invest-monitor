@@ -88,6 +88,21 @@ export interface ReviewFill {
   accountKey?: string;
   provenance?: { fileName: string; fileSha256: string; page: number; row: number; broker: string; action: "open" | "close"; settlementDate: string; grossAmount: string; netCash: string; feeBreakdown: Record<string, string>; originalTime: string; originalTimezone: string | null };
 }
+/** Explicit trading lessons the user keeps while trading, in three categories; edits keep the previous version. */
+export const LESSON_CATEGORIES = { option: "期权", stock: "股票", hedge: "对冲设置" } as const;
+export type LessonCategory = keyof typeof LESSON_CATEGORIES;
+export const TradingLessonInputSchema = z.object({
+  category: z.enum(["option", "stock", "hedge"]),
+  title: required.max(200),
+  body: required,
+  trigger: text.default(""), action: text.default(""),
+  caseIds: ids.default([]),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  status: z.enum(["active", "retired"]).default("active"),
+}).strict();
+export type TradingLessonInput = z.infer<typeof TradingLessonInputSchema>;
+export const TradingLessonUpdateSchema = TradingLessonInputSchema.extend({ expectedRevision: z.number().int().positive() }).strict();
+export interface TradingLesson extends TradingLessonInput { id: string; createdAt: string; updatedAt: string; revision: number; history: (TradingLessonInput & { recordedAt: string })[] }
 export interface StatementImport {
   id: string; fileName: string; sha256: string; broker: string; importedAt: string;
   fills: ReviewFill[]; grossTotal: string; netCash: string; feesTotal: string; notes: string[];

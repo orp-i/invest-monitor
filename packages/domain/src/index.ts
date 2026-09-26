@@ -18,6 +18,8 @@ export * from "./research-market.js";
 
 export * from "./trade-direction.js";
 export * from "./strategy-clusters.js";
+export * from "./review-sop.js";
+export * from "./merge-advice.js";
 export * from "./performance-history.js";
 export * from "./market-daily.js";
 export * from "./daily-inference.js";

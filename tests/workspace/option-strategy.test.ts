@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "decimal.js";
-import { identifyStrategy, optionIdentity, type StrategyLeg } from "@invest/domain";
+import { baseStrategyLabel, identifyStrategy, optionIdentity, SAME_DAY_EVIDENCE_SUFFIX, SAME_DAY_SUFFIX, type StrategyLeg } from "@invest/domain";
 
 const leg = (type: "P" | "C", strike: number, direction: "long" | "short", quantity = "1"): StrategyLeg => ({
   symbol: `XYZ260918${type}${String(strike * 1000).padStart(8, "0")}`, direction,
@@ -53,6 +53,20 @@ describe("OptionStrat structural classification", () => {
     for (const edge of [80, 130]) expect(payoff(iron, 100).gt(payoff(iron, edge))).toBe(true);
     expect(identifyStrategy([...iron].reverse())).toEqual(identifyStrategy(iron));
   });
+  it("recognizes broker-flagged same-day openings and uniform unknown sizes on a standard root, never a mixed or adjusted size", () => {
+    const a = { ...leg("C", 770, "long"), symbol: "SPY260925C00770000", openingAt: null, openingDay: "2026-09-25", openingConfirmed: true, multiplier: null };
+    const b = { ...leg("C", 771, "short"), symbol: "SPY260925C00771000", openingAt: null, openingDay: "2026-09-25", openingConfirmed: true, multiplier: null };
+    expect(identifyStrategy([a, b]).referenceUrl).toBeNull();
+    const evidence = identifyStrategy([a, b], { sameDayEvidence: true });
+    expect(evidence).toMatchObject({ timing: "same-day", marketDirection: "bullish", referenceUrl: "https://optionstrat.com/build/bull-call-spread" });
+    expect(evidence.label.endsWith(SAME_DAY_EVIDENCE_SUFFIX)).toBe(true);
+    expect(baseStrategyLabel(evidence.label)).toBe("看多认购价差（买低卖高行权价）");
+    expect(identifyStrategy([a, b], { sameDayEvidence: true, sameDayConfirmed: true }).label.endsWith(SAME_DAY_SUFFIX)).toBe(true);
+    expect(identifyStrategy([a, b].map(l => ({ ...l, symbol: l.symbol.replace("SPY", "SPY1") })), { sameDayEvidence: true }).referenceUrl).toBeNull();
+    expect(identifyStrategy([{ ...a, multiplier: "100" }, b], { sameDayEvidence: true }).referenceUrl).toBeNull();
+    expect(identifyStrategy([a, { ...b, openingConfirmed: false }], { sameDayEvidence: true }).referenceUrl).toBeNull();
+    expect(identifyStrategy([a, { ...b, openingDay: "2026-09-24" }], { sameDayEvidence: true }).referenceUrl).toBeNull();
+  });
   it("does not guess calendar, ratio, cross-currency, unknown-size or independently opened structures", () => {
     const a = leg("P", 90, "short"), b = leg("P", 110, "long");
     for (const change of [{ symbol: b.symbol.replace("260918", "261016") }, { openingQuantity: "2" }, { currency: "HKD" }, { broker: "other" }, { multiplier: null }, { multiplier: "10" }, { openingAt: null }, { openingAt: "2026-09-02T15:00:00Z" }, { direction: "unknown" as const }]) {
@@ -78,7 +92,7 @@ describe("same-day recognition for user-confirmed groupings", () => {
     expect(identifyStrategy([dayLeg("C", 55, "long"), { ...dayLeg("C", 65, "short"), symbol: "XYZ261218C00065000" }], { sameDayConfirmed: true }).timing).toBeNull();
     expect(identifyStrategy([dayLeg("P", 100, "long")], { sameDayConfirmed: true })).toMatchObject({ timing: "exact", referenceUrl: "https://optionstrat.com/build/long-put" });
   });
-  it("applies the relaxed tier only to groupings the user made or confirmed", async () => {
+  it("applies the same-day tier to user groupings and to broker-flagged automatic cases, each with its own suffix", async () => {
     const { reviewExecutionDetails, userConfirmedGrouping } = await import("@invest/domain");
     const fill = (id: string, symbol: string, side: "buy" | "sell") => ({ id, transactionId: id, source: "tradier" as const, symbol, instrumentKey: symbol, side, quantity: "1", price: "1", feeCost: "0", multiplier: "100", currency: "USD", occurredAt: "2026-09-16", timePrecision: "day" as const, positionEffect: "open" as const });
     const fills = [fill("a", "UCO261016C00055000", "buy"), fill("c", "UCO261016C00065000", "sell")];
@@ -89,7 +103,12 @@ describe("same-day recognition for user-confirmed groupings", () => {
     const untouched = { ...base, id: "auto-case-z", linkHistory: [] };
     expect([manual, merged, automatic, untouched].map(userConfirmedGrouping)).toEqual([true, true, false, false]);
     expect(reviewExecutionDetails(manual).strategy.timing).toBe("same-day");
-    expect(reviewExecutionDetails(merged).strategy.label).toContain("看多认购价差");
-    expect(reviewExecutionDetails(untouched).strategy.timing).toBeNull();
+    expect(reviewExecutionDetails(manual).strategy.label.endsWith(SAME_DAY_SUFFIX)).toBe(true);
+    expect(reviewExecutionDetails(merged).strategy.label).toBe(`看多认购价差（买低卖高行权价）${SAME_DAY_SUFFIX}`);
+    // Automatic cases whose every fill carries a broker open/close flag are recognized too, labelled as broker evidence.
+    expect(reviewExecutionDetails(automatic).strategy.label).toBe(`看多认购价差（买低卖高行权价）${SAME_DAY_EVIDENCE_SUFFIX}`);
+    expect(reviewExecutionDetails(untouched).strategy).toMatchObject({ timing: "same-day", label: expect.stringContaining(SAME_DAY_EVIDENCE_SUFFIX) });
+    const unflagged = { ...untouched, fills: fills.map((f, i) => i === 1 ? { ...f, positionEffect: null } : f) };
+    expect(reviewExecutionDetails(unflagged).strategy.timing).toBeNull();
   });
 });

@@ -80,6 +80,7 @@ import { tradierMarketData } from "./market-data.js";
 import { researchBoardRequest, researchSeriesRequest } from "./research-market.js";
 import { marketDailyRequest } from "./market-daily.js";
 import { DailyInferenceService } from "./daily-inference.js";
+import { MergeAdvisorService } from "./merge-advisor.js";
 import { dailyLlmProvider, type DailyLlmProvider } from "./daily-llm.js";
 import { dailyLlmEgressProfiles } from "./daily-llm-egress.js";
 import { syncHeldInstruments, heldQuoteInstrumentIds } from "./held-instruments.js";
@@ -150,6 +151,8 @@ interface HttpDependencies {
   secureSessionCookie: boolean;
   events: SseEventHub;
   dailyInference?: DailyInferenceService;
+  /** SOP merge advice (LLM); absent in isolated tests. */
+  mergeAdvisor?: MergeAdvisorService;
   /** Account settings (encrypted overrides + env fallback); absent in isolated tests. */
   settings?: SettingsService;
   dailyLlm?: DailyLlmProvider;
@@ -237,6 +240,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
   marketClockTimer.unref();
   const scheduler = new CollectorScheduler(storage, httpClient, adapters, resolveAuthReference, { onDemand: true, automaticStocks: true });
   await storage.recoverDailyInferenceRuns();
+  await storage.recoverMergeAdviceRuns();
   const dailyHttp = new EgressHttpClient(new EgressDispatcherPool(dailyLlmEgressProfiles(initialSnapshot.config.egressProfiles as Record<EgressName, EgressProfile>)));
   const dailyLlm = switchableDailyLlmProvider(() => dailyLlmProvider(dailyHttp, settings.env()));
   const dailyInference = new DailyInferenceService(storage, dailyLlm, async id => {
@@ -245,6 +249,8 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     const reply = await researchSeriesRequest(id, false, { storage, httpClient, tradierContext: context });
     return reply.body.series as import("@invest/domain").StudySeries | undefined ?? null;
   });
+  // Same provider/credentials as the daily inference; REVIEW_MERGE_ADVICE_AUTO=0 keeps it manual-only.
+  const mergeAdvisor = new MergeAdvisorService(storage, dailyLlm, { auto: (settings.env().REVIEW_MERGE_ADVICE_AUTO ?? "1") !== "0" });
   scheduler.setBackgroundQuoteInstruments(await heldQuoteInstrumentIds(initialSnapshot.config, storage));
   const events = new SseEventHub();
   const intel = new IntelScheduler(storage, httpClient, resolveAuthReference, (item, generation) => {
@@ -265,11 +271,12 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     storage,
     sessionSchedule,
     // Session samples only re-read the live broker; IBKR Flex reports do not change intraday.
-    refreshBrokers: kind => refreshPerformanceBrokers(brokerConnections(settings.env()).filter(c => kind === "half-day" || c.id === "tradier"), broker => refreshBrokerAccount(broker, { storage, configManager, httpClient, scheduler, events, settings })),
+    refreshBrokers: kind => refreshPerformanceBrokers(brokerConnections(settings.env()).filter(c => kind === "half-day" || c.id === "tradier"), broker => refreshBrokerAccount(broker, { storage, configManager, httpClient, scheduler, events, settings, mergeAdvisor })),
     record: async scheduledFor => {
       if (await enrichHeldMultipliers({ storage, configManager, httpClient })) await configManager.reload(true);
       scheduler.setBackgroundQuoteInstruments(await heldQuoteInstrumentIds(configManager.snapshot.config, storage));
       await syncAutomaticTradingCases(storage);
+      void mergeAdvisor.maybeAuto().catch(error => log("merge_advice.auto_failed", { error: errorMessage(error) }));
       await recordPerformance(storage, configManager.snapshot.config, scheduledFor);
     },
     onRecorded: () => events.publish("pnl.updated", configManager.snapshot.generation, { reason: "valuation-recorded" }),
@@ -312,7 +319,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
         const environment = brokerSnapshotEnvironment(connection);
         const last = Math.max(0, ...accounts.filter(a => a.broker === connection.id && a.environment === environment).map(a => Date.parse(a.syncedAt) || 0), ...attempts.filter(a => a.broker === connection.id && a.mode === connection.mode).map(a => Date.parse(a.startedAt) || 0));
         if (Date.now() - last < interval || brokerSyncs.get(storage)?.has(connection.id)) continue;
-        await refreshBrokerAccount(connection.id, { storage, configManager, httpClient, scheduler, events, settings }).catch(() => log("broker.auto_sync_failed", { broker: connection.id }));
+        await refreshBrokerAccount(connection.id, { storage, configManager, httpClient, scheduler, events, settings, mergeAdvisor }).catch(() => log("broker.auto_sync_failed", { broker: connection.id }));
       }
     })().catch(() => log("broker.auto_sync_failed", {})).finally(() => { brokerTask = null; });
   };
@@ -326,7 +333,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     if (group === "tradier") void configManager.reload(true).catch(() => undefined);
     if (group === "tradier" || group === "ibkr" || group === "schwab" || group === "alpaca") {
       const connection = brokerConnections(settings.env()).find(c => c.id === group);
-      if (connection?.configured && !brokerSyncs.get(storage)?.has(group)) void refreshBrokerAccount(group, { storage, configManager, httpClient, scheduler, events, settings }).catch(() => log("broker.auto_sync_failed", { broker: group }));
+      if (connection?.configured && !brokerSyncs.get(storage)?.has(group)) void refreshBrokerAccount(group, { storage, configManager, httpClient, scheduler, events, settings, mergeAdvisor }).catch(() => log("broker.auto_sync_failed", { broker: group }));
     }
   });
   // Serve the built SPA from the API process when no reverse proxy is in front (source and bundle installs).
@@ -372,6 +379,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
   const server = createHttpServer({
     sessionSchedule,
     dailyInference,
+    mergeAdvisor,
     configManager,
     storage,
     scheduler,
@@ -419,6 +427,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
       unsubscribeSettings();
       if (runtimeSettings === settings) runtimeSettings = null;
       await dailyInference.close();
+      await mergeAdvisor.close();
       await dailyHttp.close();
       brokersClosing = true; clearInterval(brokerTimer);
       await brokerTask;
@@ -608,6 +617,12 @@ export async function handleRequest(
       quotes: await quoteEnvelopes(instrument, snapshot, deps, observations),
     })));
     writeJson(response, 200, { generation: snapshot.generation, instruments });
+    return;
+  }
+  if (pathname === "/api/trading-review/advice" || pathname.startsWith("/api/trading-review/advice/")) {
+    if (!deps.mergeAdvisor) { writeJson(response, 501, { message: "合并建议服务未启用" }); return; }
+    const result = await deps.mergeAdvisor.request(request.method ?? "GET", pathname, request.method === "POST" ? await readJson(request).catch(() => ({})) : undefined);
+    writeJson(response, result.status, result.body);
     return;
   }
   if (pathname === "/api/trading-review" || pathname.startsWith("/api/trading-review/")) {
@@ -1565,7 +1580,7 @@ function failedProbe(
   };
 }
 
-type BrokerRefreshDependencies = Pick<HttpDependencies, "storage" | "configManager" | "httpClient" | "scheduler" | "events" | "settings">;
+type BrokerRefreshDependencies = Pick<HttpDependencies, "storage" | "configManager" | "httpClient" | "scheduler" | "events" | "settings" | "mergeAdvisor">;
 /** Snapshot environment a connection writes: report brokers use "statement", paper accounts "sandbox". */
 function brokerSnapshotEnvironment(connection: Pick<BrokerConnectionStatus, "id" | "mode">): string {
   return connection.id === "ibkr" ? "statement" : connection.id === "schwab" ? "live" : connection.id === "alpaca" ? (connection.mode === "paper" ? "sandbox" : "live") : connection.mode;
@@ -1588,6 +1603,7 @@ async function refreshBrokerAccount(broker: BrokerApiId, deps: BrokerRefreshDepe
     await enrichHeldMultipliers(deps).catch(() => false);
     if (typeof deps.configManager?.reload === "function") await deps.configManager.reload(true);
     await syncAutomaticTradingCases(deps.storage);
+    void deps.mergeAdvisor?.maybeAuto().catch(error => log("merge_advice.auto_failed", { error: errorMessage(error) }));
     if (deps.configManager) {
       deps.scheduler?.setBackgroundQuoteInstruments?.(await heldQuoteInstrumentIds(deps.configManager.snapshot.config, deps.storage));
       deps.events?.publish("pnl.updated", deps.configManager.snapshot.generation, { reason: "broker-synced", broker });

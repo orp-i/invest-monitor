@@ -10,7 +10,7 @@ const call = (provider: ReturnType<typeof dailyLlmProvider>, signal = new AbortC
 
 describe("daily LLM provider protocol", () => {
   it.each(["openai-compatible", "openai"])("sends one bounded %s request, keeps the key server-side and records returned model/usage", async mode => {
-    const http = transport(), provider = dailyLlmProvider(http as any, { ...env, DAILY_LLM_PROVIDER: mode });
+    const http = transport(), provider = dailyLlmProvider(http as any, { ...env, DAILY_LLM_PROVIDER: mode, DAILY_LLM_MAX_OUTPUT_TOKENS: "6000" });
     const reply = await call(provider), sent = http.request.mock.calls[0]![0];
     expect(sent).toMatchObject({ url: "https://llm.example/v1/chat/completions", method: "POST", egressProfile: "vpn", egressFallback: [], followRedirects: false, maxRedirects: 0, requestTimeoutMs: 180000 });
     expect(sent.headers.authorization).toBe(`Bearer ${env.DAILY_LLM_API_KEY}`);
@@ -19,6 +19,21 @@ describe("daily LLM provider protocol", () => {
     expect(reply).toMatchObject({ text: normal.choices[0]!.message.content, model: "resolved-model", usage: { inputTokens: 20, outputTokens: 30 } });
     expect(JSON.stringify(provider.status())).not.toContain(env.DAILY_LLM_API_KEY); expect(JSON.stringify(provider.status())).not.toContain(env.DAILY_LLM_BASE_URL);
     expect(http.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends no output ceiling when the budget is unset or 0, and boosts a bounded budget only on retry", async () => {
+    for (const value of [undefined, "0", " "]) {
+      const http = transport(), provider = dailyLlmProvider(http as any, value === undefined ? env : { ...env, DAILY_LLM_MAX_OUTPUT_TOKENS: value });
+      expect(provider.status().configured).toBe(true);
+      await provider.complete("s", "u", new AbortController().signal, { outputTokenBoost: true });
+      const payload = JSON.parse(http.request.mock.calls[0]![0].body);
+      expect(payload).not.toHaveProperty("max_tokens"); expect(payload).not.toHaveProperty("max_completion_tokens");
+    }
+    const http = transport(), bounded = dailyLlmProvider(http as any, { ...env, DAILY_LLM_MAX_OUTPUT_TOKENS: "20000" });
+    await bounded.complete("s", "u", new AbortController().signal, { outputTokenBoost: true });
+    expect(JSON.parse(http.request.mock.calls[0]![0].body).max_tokens).toBe(40000);
+    expect(dailyLlmProvider(http as any, { ...env, DAILY_LLM_MAX_OUTPUT_TOKENS: "500" }).status().configured).toBe(false);
+    expect(dailyLlmProvider(http as any, { ...env, DAILY_LLM_MAX_OUTPUT_TOKENS: "400001" }).status().configured).toBe(false);
   });
 
   it("accepts the full endpoint, applies explicit timeout/token/egress overrides and ignores unrelated news LLM configuration", async () => {

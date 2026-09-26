@@ -184,6 +184,8 @@ Monorepo layout:
 
 ## Documentation index
 
+- [Changelog](CHANGELOG.md): feature and rule changes per version.
+
 Most in-depth documents are Chinese-only for now:
 
 - [Install & deploy](docs/INSTALL.md) — three install modes, environment variable reference, upgrade/backup, troubleshooting

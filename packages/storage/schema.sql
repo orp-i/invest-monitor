@@ -475,3 +475,21 @@ CREATE TABLE IF NOT EXISTS research_board_records (
   PRIMARY KEY (kind, id)
 );
 CREATE INDEX IF NOT EXISTS idx_research_board_active ON research_board_records(updated_at DESC) WHERE archived_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS review_merge_advice (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  run_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_review_merge_advice_created ON review_merge_advice(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS trading_lessons (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  status TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  lesson_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trading_lessons_updated ON trading_lessons(category, status, updated_at DESC);

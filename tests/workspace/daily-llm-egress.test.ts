@@ -53,7 +53,7 @@ describe("daily LLM route selection", () => {
     expect(one.connection?.selected).toBe("direct");
     expect(transport.request.mock.calls.filter(([o]) => o.method === "GET")).toHaveLength(4);
     const posts = transport.request.mock.calls.filter(([o]) => o.method === "POST");
-    expect(posts).toHaveLength(2); expect(JSON.parse(posts[0]![0].body)).toMatchObject({ response_format: { type: "json_object" }, max_tokens: 6000 });
+    expect(posts).toHaveLength(2); expect(JSON.parse(posts[0]![0].body)).toMatchObject({ response_format: { type: "json_object" } }); expect(JSON.parse(posts[0]![0].body)).not.toHaveProperty("max_tokens"); // unlimited by default
     expect(posts[0]![0]).toMatchObject({ url: "https://provider.test/chat/completions", egressProfile: "direct", egressFallback: [] });
     vi.setSystemTime(new Date("2026-09-13T07:16:00Z")); await call(provider);
     expect(transport.request.mock.calls.filter(([o]) => o.method === "GET")).toHaveLength(8);

@@ -1292,3 +1292,15 @@ summary { cursor: pointer; }
   .settings-actions button { flex: 1 1 auto; }
   .settings-example pre { padding: 40px 12px 12px; }
 }
+.tr-advice summary { cursor: pointer; }
+.tr-advice-list { margin: 8px 0 0 18px; padding: 0; display: grid; gap: 10px; }
+.tr-advice-list li { line-height: 1.7; }
+.tr-advice-list .text-button { margin-right: 10px; }
+.tr-lessons-heading { align-items: flex-start; margin-bottom: 12px; }
+.tr-lessons .tr-tabs { align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.tr-lesson-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 12px; }
+.tr-lesson-list li header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.tr-lesson-list li header time { margin-left: auto; color: var(--muted); font-size: 11px; }
+.tr-lesson-body { white-space: pre-wrap; }
+.tr-lesson-actions .text-button { margin-right: 12px; }
+.tr-case-lessons .text-button { margin-left: 8px; }

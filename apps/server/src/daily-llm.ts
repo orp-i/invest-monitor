@@ -5,7 +5,10 @@ import { DailyLlmEgress } from "./daily-llm-egress.js";
 
 export interface DailyLlmReply { text: string; model: string; usage: { inputTokens: number | null; outputTokens: number | null }; connection?: DailyLlmConnection }
 // Implement this interface to add a provider with a different wire protocol.
-export interface DailyLlmCompleteOptions { /** Second attempt after a truncated reply: request up to twice the configured output budget (capped at 16000). */ outputTokenBoost?: boolean }
+export interface DailyLlmCompleteOptions {
+  /** Second attempt after a truncated reply: request up to twice the configured output budget (capped). No effect when the budget is unlimited (0). */
+  outputTokenBoost?: boolean;
+}
 export interface DailyLlmProvider {
   status(): DailyLlmStatus;
   complete(system: string, user: string, signal: AbortSignal, options?: DailyLlmCompleteOptions): Promise<DailyLlmReply>;
@@ -16,7 +19,10 @@ export type DailyLlmErrorCode = "truncated" | "invalid-output";
 export class DailyLlmError extends Error {
   constructor(message: string, readonly code: DailyLlmErrorCode | null = null, readonly detail: string | null = null) { super(message); }
 }
-export const MAX_OUTPUT_TOKENS_CAP = 16000;
+// Upper bound for an explicit budget; the provider still enforces its own model ceiling (DeepSeek reported 393216).
+// 0 means unlimited: no max_tokens is sent and the provider default applies. Reasoning models count their thinking
+// against max_tokens, so small budgets truncate long structured replies.
+export const MAX_OUTPUT_TOKENS_CAP = 400000;
 export function dailyLlmProvider(http: EgressHttpClient, env: NodeJS.ProcessEnv = process.env): DailyLlmProvider {
   const provider = env.DAILY_LLM_PROVIDER?.trim().toLowerCase() || "openai-compatible";
   const key = env.DAILY_LLM_API_KEY?.trim() || "", base = env.DAILY_LLM_BASE_URL?.trim() || "", model = env.DAILY_LLM_MODEL?.trim() || "";
@@ -31,9 +37,9 @@ export function dailyLlmProvider(http: EgressHttpClient, env: NodeJS.ProcessEnv 
       if (!endpoint.endsWith("/chat/completions")) endpoint += "/chat/completions";
     } catch { issue = "DAILY_LLM_BASE_URL 必须是没有账号、查询参数或片段的 HTTP(S) API 地址。"; }
   }
-  const timeout = Number(env.DAILY_LLM_TIMEOUT_MS || 180000), maxTokens = Number(env.DAILY_LLM_MAX_OUTPUT_TOKENS || 6000);
+  const timeout = Number(env.DAILY_LLM_TIMEOUT_MS || 180000), maxTokens = env.DAILY_LLM_MAX_OUTPUT_TOKENS?.trim() ? Number(env.DAILY_LLM_MAX_OUTPUT_TOKENS) : 0;
   if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 300000) issue = "DAILY_LLM_TIMEOUT_MS 范围为 1000–300000。";
-  if (!Number.isInteger(maxTokens) || maxTokens < 1000 || maxTokens > MAX_OUTPUT_TOKENS_CAP) issue = "DAILY_LLM_MAX_OUTPUT_TOKENS 范围为 1000–16000。";
+  if (!Number.isInteger(maxTokens) || maxTokens < 0 || (maxTokens > 0 && maxTokens < 1000) || maxTokens > MAX_OUTPUT_TOKENS_CAP) issue = "DAILY_LLM_MAX_OUTPUT_TOKENS 为 0（不设上限）或 1000–400000。";
   const mode = env.DAILY_LLM_EGRESS_PROFILE?.trim() || "auto";
   if (!["auto", "direct", "vpn", "corp"].includes(mode)) issue = "DAILY_LLM_EGRESS_PROFILE 支持 auto、direct、vpn 或 corp。";
   const routes = new DailyLlmEgress(http, endpoint.replace(/\/chat\/completions$/, "/models"), key, model, mode as DailyLlmConnection["mode"]);
@@ -57,7 +63,7 @@ export function dailyLlmProvider(http: EgressHttpClient, env: NodeJS.ProcessEnv 
           url: endpoint, method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
           body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], stream: false,
             ...(provider === "deepseek" ? { response_format: { type: "json_object" } } : {}),
-            [provider === "openai" ? "max_completion_tokens" : "max_tokens"]: options?.outputTokenBoost ? Math.min(MAX_OUTPUT_TOKENS_CAP, maxTokens * 2) : maxTokens }),
+            ...(maxTokens > 0 ? { [provider === "openai" ? "max_completion_tokens" : "max_tokens"]: options?.outputTokenBoost ? Math.min(MAX_OUTPUT_TOKENS_CAP, maxTokens * 2) : maxTokens } : {}) }),
           egressProfile: egress as EgressName, egressFallback: [], userAgent: profile.userAgent,
           followRedirects: false, maxRedirects: 0, connectTimeoutMs: profile.connectTimeoutMs, requestTimeoutMs: timeout, signal,
         });
@@ -68,7 +74,8 @@ export function dailyLlmProvider(http: EgressHttpClient, env: NodeJS.ProcessEnv 
         if (reply.value.body.byteLength > 2_000_000) throw new DailyLlmError("LLM 返回内容过大，未保存为操作建议。");
         const result = JSON.parse(new TextDecoder().decode(reply.value.body));
         const choice = result?.choices?.[0];
-        if (choice?.finish_reason === "length") throw new DailyLlmError("LLM 输出被截断，请提高输出 token 上限或缩短参考范围后重试。", "truncated");
+        // The partial text travels as detail so callers can record what the model was producing; it is never a result.
+        if (choice?.finish_reason === "length") throw new DailyLlmError("LLM 输出被截断，请提高输出 token 上限或缩短参考范围后重试。", "truncated", typeof choice?.message?.content === "string" ? choice.message.content.slice(0, 4000) : null);
         if (choice?.finish_reason !== "stop" || choice?.message?.refusal || typeof choice?.message?.content !== "string" || !choice.message.content.trim()) throw new DailyLlmError("LLM 未返回完整文字结果，请检查模型或稍后重试。");
         const count = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
         return { text: choice.message.content, model: typeof result.model === "string" ? result.model : model, connection: routes.status(),

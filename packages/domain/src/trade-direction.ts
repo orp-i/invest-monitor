@@ -34,13 +34,27 @@ export interface StrategyLeg {
 }
 /** timing: "exact" = legs opened at the same verified instant; "same-day" = user-confirmed grouping with same-day explicit openings. */
 export interface IdentifiedStrategy { label: string; marketDirection: MarketDirection; referenceUrl: string | null; timing: "exact" | "same-day" | null }
-export interface IdentifyOptions { /** Allow recognition of legs that opened on the same report day with explicit open flags when instants are unavailable; only for groupings the user confirmed. */ sameDayConfirmed?: boolean }
+export interface IdentifyOptions {
+  /** Allow recognition of legs that opened on the same report day with explicit open flags when instants are unavailable; for groupings the user confirmed. */
+  sameDayConfirmed?: boolean;
+  /** Same-day recognition when every opening carries a broker open flag (closed lots or observed orders), e.g. Tradier gainloss on date-only history. */
+  sameDayEvidence?: boolean;
+  /** Open/close roles came from the SOP-4 debit-spread default on a user-confirmed grouping; the label says so. */
+  sopInferred?: boolean;
+}
 export const SAME_DAY_SUFFIX = " · 按同日开仓识别（用户已确认）";
+export const SAME_DAY_EVIDENCE_SUFFIX = " · 按同日开仓识别（券商开平标记）";
+export const SOP_INFERRED_SUFFIX = " · 按 SOP 推断（借方价差默认，缺少开平标记）";
+/** Structure label without the same-day provenance suffix, for titles. */
+export const baseStrategyLabel = (label: string): string => label.replace(SAME_DAY_SUFFIX, "").replace(SAME_DAY_EVIDENCE_SUFFIX, "").replace(SOP_INFERRED_SUFFIX, "");
+/** Standard OCC roots are letters only; adjusted series (e.g. SPY1) may deliver a different size and are never assumed equal. */
+export const standardOptionRoot = (underlying: string): boolean => /^[A-Z.]+$/.test(underlying);
 const identified = (label: string, direction: MarketDirection, slug?: string): IdentifiedStrategy => ({ label, marketDirection: direction, referenceUrl: slug ? `https://optionstrat.com/build/${slug}` : null, timing: slug ? "exact" : null });
 
 // Structural classifications follow https://optionstrat.com/strategies.
 // They describe the opening structure, not live delta or the trader's intent.
-// Multi-leg recognition requires matching, simultaneous, verified openings.
+// Multi-leg recognition requires matching openings that are simultaneous, or on the same report day
+// when every opening is explicitly flagged (user-confirmed grouping or broker lot/order evidence).
 export function identifyStrategy(legs: StrategyLeg[], settings: IdentifyOptions = {}): IdentifiedStrategy {
   if (!legs.length || legs.some(l => l.direction === "unknown")) return identified("结构方向待核实", "unknown");
   if (legs.some(l => l.direction === "mixed")) return identified("包含多空转换", "mixed");
@@ -54,12 +68,17 @@ export function identifyStrategy(legs: StrategyLeg[], settings: IdentifyOptions 
   const parsed = legs.map(l => ({ ...l, option: optionIdentity(l.symbol), quantity: new Decimal(l.openingQuantity) }));
   const first = parsed[0]!;
   const exact = !!first.openingAt && parsed.every(l => l.openingAt === first.openingAt);
-  const sameDay = !exact && settings.sameDayConfirmed === true && !!first.openingDay && parsed.every(l => l.openingDay === first.openingDay && l.openingConfirmed === true);
-  if (!first.option || (!exact && !sameDay) || first.multiplier == null || new Decimal(first.multiplier).lte(0) || parsed.some(l =>
+  const sameDayAllowed = settings.sameDayConfirmed === true || settings.sameDayEvidence === true || settings.sopInferred === true;
+  const sameDay = !exact && sameDayAllowed && !!first.openingDay && parsed.every(l => l.openingDay === first.openingDay && l.openingConfirmed === true);
+  // Contract size must be comparable: all multipliers known and equal, or all unknown on one standard OCC root
+  // (same underlying and expiry share a deliverable). A mix of known and unknown sizes is never assumed equal.
+  const sizeKnown = first.multiplier != null && new Decimal(first.multiplier).gt(0) && parsed.every(l => l.multiplier != null && new Decimal(l.multiplier).eq(first.multiplier!));
+  const sizeUnknownButUniform = parsed.every(l => l.multiplier == null) && !!first.option && standardOptionRoot(first.option.underlying);
+  if (!first.option || (!exact && !sameDay) || !(sizeKnown || sizeUnknownButUniform) || parsed.some(l =>
     !l.option || l.option.underlying !== first.option!.underlying || l.option.expiry !== first.option!.expiry ||
-    l.multiplier == null || !new Decimal(l.multiplier).eq(first.multiplier!) ||
     l.currency !== first.currency || l.broker !== first.broker || l.quantity.lte(0))) return fallback;
-  const done = (result: IdentifiedStrategy): IdentifiedStrategy => exact ? result : { ...result, label: `${result.label}${SAME_DAY_SUFFIX}`, timing: "same-day" };
+  const suffix = settings.sopInferred === true ? SOP_INFERRED_SUFFIX : settings.sameDayConfirmed === true ? SAME_DAY_SUFFIX : SAME_DAY_EVIDENCE_SUFFIX;
+  const done = (result: IdentifiedStrategy): IdentifiedStrategy => exact ? result : { ...result, label: `${result.label}${suffix}`, timing: "same-day" };
   const options = parsed.map(l => ({ ...l, option: l.option!, strike: new Decimal(l.option!.strike) })).sort((a, b) => a.strike.comparedTo(b.strike));
   const equalSize = options.every(l => l.quantity.eq(first.quantity));
   if (options.length === 2 && equalSize) {

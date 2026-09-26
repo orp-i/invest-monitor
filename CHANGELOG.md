@@ -24,6 +24,8 @@ Versions follow `apps/server/package.json`; dates are UTC. Entries describe feat
 ### 运维 / Operations
 - 记录并修复了 2026-09-24 至 09-26 的出口代理事故排查口径（券商同时报“读取失败”时先分层核对代理、凭证与直连）；文档补充出口代理变量说明。
 - Documented the egress-proxy troubleshooting order for simultaneous broker sync failures.
+- Docker 镜像改名为 `ghcr.io/<owner>/invest-monitor/api` 与 `ghcr.io/<owner>/invest-monitor/web`（`docker-compose.ghcr.yml` 默认值同步）：GHCR 对已删除包保留 30 天名称，旧的 `invest-monitor-api/-web` 名称无法由本仓库的 `GITHUB_TOKEN` 推送；docker-publish 工作流支持手动指定标签重建。两份 compose 的 `DAILY_LLM_MAX_OUTPUT_TOKENS` 默认值改为 0。
+- Docker images are now published as `ghcr.io/<owner>/invest-monitor/api` and `.../web` (compose defaults updated); the docker-publish workflow can be dispatched for an existing tag.
 
 ## 0.1.0 — 2026-09-23
 

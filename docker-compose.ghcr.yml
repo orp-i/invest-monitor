@@ -3,14 +3,14 @@
 #
 #   docker compose -f docker-compose.ghcr.yml up -d
 #
-# INVEST_IMAGE_API/INVEST_IMAGE_WEB default to ghcr.io/OWNER/invest-monitor-{api,web}:latest — replace
+# INVEST_IMAGE_API/INVEST_IMAGE_WEB default to ghcr.io/OWNER/invest-monitor/{api,web}:latest — replace
 # OWNER with the GitHub org/user that published the images (see .github/workflows/docker-publish.yml,
-# which publishes as ghcr.io/${{ github.repository_owner }}/invest-monitor-{api,web}). Set an explicit tag
+# which publishes as ghcr.io/${{ github.repository_owner }}/invest-monitor/{api,web}). Set an explicit tag
 # (a release version instead of :latest) in .env for a reproducible deployment, e.g.
-# INVEST_IMAGE_API=ghcr.io/your-org/invest-monitor-api:v1.2.0.
+# INVEST_IMAGE_API=ghcr.io/your-org/invest-monitor/api:v0.2.0.
 services:
   api:
-    image: ${INVEST_IMAGE_API:-ghcr.io/OWNER/invest-monitor-api:latest}
+    image: ${INVEST_IMAGE_API:-ghcr.io/OWNER/invest-monitor/api:latest}
     environment:
       TZ: ${TZ:-America/New_York}
       NODE_ENV: production
@@ -33,7 +33,7 @@ services:
       DAILY_LLM_API_KEY: ${DAILY_LLM_API_KEY:-}
       DAILY_LLM_MODEL: ${DAILY_LLM_MODEL:-}
       DAILY_LLM_TIMEOUT_MS: ${DAILY_LLM_TIMEOUT_MS:-180000}
-      DAILY_LLM_MAX_OUTPUT_TOKENS: ${DAILY_LLM_MAX_OUTPUT_TOKENS:-6000}
+      DAILY_LLM_MAX_OUTPUT_TOKENS: ${DAILY_LLM_MAX_OUTPUT_TOKENS:-0}
       DAILY_LLM_EGRESS_PROFILE: ${DAILY_LLM_EGRESS_PROFILE:-auto}
       TRADIER_ACCESS_TOKEN: ${TRADIER_ACCESS_TOKEN:-}
       TRADIER_ENVIRONMENT: ${TRADIER_ENVIRONMENT:-live}
@@ -108,7 +108,7 @@ services:
         max-file: "2"
 
   web:
-    image: ${INVEST_IMAGE_WEB:-ghcr.io/OWNER/invest-monitor-web:latest}
+    image: ${INVEST_IMAGE_WEB:-ghcr.io/OWNER/invest-monitor/web:latest}
     environment:
       TZ: ${TZ:-America/New_York}
       API_UPSTREAM: http://api:3000

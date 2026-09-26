@@ -2,14 +2,23 @@ name: Publish Docker images
 
 # Builds and pushes the two runtime images (Dockerfile targets api-runtime/web-runtime — see
 # docker-compose.ghcr.yml, which pulls them by these same names) to GHCR, multi-arch
-# (linux/amd64 + linux/arm64). Triggered by a version tag, or manually for a rebuild without a new tag
-# (e.g. after a base-image security update); either way the image is tagged with the ref name that
-# triggered the run, plus "latest".
+# (linux/amd64 + linux/arm64). Triggered by a version tag, or manually (optionally for an existing tag,
+# e.g. to rebuild after a base-image security update or when an earlier push was denied); the image is
+# tagged with that ref name plus "latest".
+#
+# Image names are nested under the repository name (ghcr.io/<owner>/invest-monitor/api, .../web). GHCR keeps a
+# deleted package's name reserved for its 30-day restore window and refuses GITHUB_TOKEN pushes to it from another
+# repository, so the flat invest-monitor-api/-web names of the deleted 2026-09 repository are not reusable.
 on:
   push:
     tags:
       - "v*"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag (or commit) to build; images are tagged with this name. Defaults to the branch the workflow runs on."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -22,12 +31,21 @@ jobs:
       matrix:
         include:
           - target: api-runtime
-            image: invest-monitor-api
+            image: invest-monitor/api
           - target: web-runtime
-            image: invest-monitor-web
+            image: invest-monitor/web
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Image tag
+        # Manual runs for an existing tag are tagged with that tag, not with the branch the workflow file came from.
+        id: tag
+        run: echo "name=${REF##*/}" >> "$GITHUB_OUTPUT"
+        env:
+          REF: ${{ inputs.ref || github.ref_name }}
 
       - name: Lowercase repository owner
         # GHCR repository paths must be lowercase; github.repository_owner preserves the account's display case.
@@ -58,7 +76,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ steps.owner.outputs.name }}/${{ matrix.image }}:${{ github.ref_name }}
+            ghcr.io/${{ steps.owner.outputs.name }}/${{ matrix.image }}:${{ steps.tag.outputs.name }}
             ghcr.io/${{ steps.owner.outputs.name }}/${{ matrix.image }}:latest
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}

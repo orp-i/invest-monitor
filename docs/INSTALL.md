@@ -36,7 +36,7 @@ openssl rand -hex 24 > secrets/ui_auth_token
 chmod 600 secrets/ui_auth_token
 ```
 
-**预构建镜像**（`ghcr.io/<owner>/invest-monitor-api`、`ghcr.io/<owner>/invest-monitor-web`）：
+**预构建镜像**（`ghcr.io/<owner>/invest-monitor/api`、`ghcr.io/<owner>/invest-monitor/web`）：
 
 ```bash
 docker compose -f docker-compose.ghcr.yml up -d
